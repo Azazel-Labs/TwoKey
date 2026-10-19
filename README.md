@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/Azazel-Labs/twokey/actions/workflows/ci.yml/badge.svg)](https://github.com/Azazel-Labs/twokey/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Azazel-Labs/twokey)](https://github.com/Azazel-Labs/twokey/releases)
+[![crates.io](https://img.shields.io/crates/v/twokey.svg)](https://crates.io/crates/twokey)
 [![License: CC0-1.0](https://img.shields.io/badge/license-CC0--1.0-blue.svg)](LICENSE)
 [![Rust: 1.90+](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](Cargo.toml)
 [![Edition: 2024](https://img.shields.io/badge/edition-2024-orange.svg)](Cargo.toml)
@@ -35,7 +36,52 @@ C#, and Ruby**. Path and content rules work with other file types too.
 
 ## Installation
 
-Install a published binary without a Rust toolchain:
+Use the **GitHub Action for CI** or **Cargo for local development**.
+
+### GitHub Action (recommended for CI)
+
+Add these steps to your workflow to install a prebuilt binary without a Rust
+toolchain or compilation:
+
+```yaml
+- name: Install twokey
+  uses: Azazel-Labs/TwoKey@6ebf78b9bdcfa412df2b505fea00a6f4bd495a77 # v0.1.1
+  with:
+    version: v0.1.1
+
+- run: twokey --version
+```
+
+The [Install twokey action](action.yml) verifies the release checksum and adds
+`twokey` to `PATH` for subsequent steps. It supports the Linux, macOS, and Windows
+platforms listed below. The `uses` SHA pins the installer code; `version` selects
+the CLI release. For a pinned archive checksum too, set the `sha256` input to the
+matching platform's entry in the release's
+[SHA256SUMS](https://github.com/Azazel-Labs/TwoKey/releases/download/v0.1.1/SHA256SUMS).
+
+To **enforce policy on pull requests**, follow the [GitHub Actions setup guide](docs/github-actions.md).
+It supplies the trusted workflow and runner that read policy from the base
+revision, collect approvals for the exact head commit, and publish the
+`twokey/policy` status to require in branch protection. The install step alone
+does not run policy checks. The integration can use `GITHUB_TOKEN`; a dedicated
+GitHub App is optional and lets branch protection bind results to that App.
+
+### Cargo (recommended for local use)
+
+Install the published CLI from [crates.io](https://crates.io/crates/twokey):
+
+```sh
+cargo install twokey --locked
+twokey --version
+```
+
+To select a specific release, use `cargo install twokey --version 0.1.1 --locked`.
+Cargo builds the CLI locally, requiring **Rust 1.90 or newer** and a C compiler
+for the tree-sitter grammars. On Windows, use MSVC with Visual Studio C++ Build
+Tools. Git is required when using twokey. Continue with the [quick start](#quick-start)
+to configure and check your repository.
+
+### Prebuilt binaries without Cargo
 
 **Linux / macOS:**
 
@@ -52,12 +98,14 @@ Invoke-WebRequest https://raw.githubusercontent.com/Azazel-Labs/twokey/main/inst
 
 Both installers verify the archive against the release's `SHA256SUMS` and default
 to `~/.local/bin`; add that directory to your `PATH`. Windows uses the x64 binary
-(ARM64 requires Windows x64 emulation). Use `-Version v0.1.0`, `-To <directory>`,
+(ARM64 requires Windows x64 emulation). Use `-Version v0.1.1`, `-To <directory>`,
 and `-Sha256 <hex>` in PowerShell, or `--version`, `--to`, and `--sha256` in the
 shell installer, to select a release, destination, and pinned checksum. Neither
 installer needs administrator privileges when using the default directory.
 
-Alternatively, build from source on any supported platform:
+### Build from a checkout
+
+For development, build and install from source using the same prerequisites as Cargo above:
 
 ```sh
 git clone https://github.com/Azazel-Labs/twokey.git
@@ -65,16 +113,10 @@ cd twokey
 cargo install --path . --locked
 ```
 
-Requires **Rust 1.90 or newer**, Git, and a C compiler for the tree-sitter grammars.
-On Windows, use MSVC with Visual Studio C++ Build Tools.
-
-The [release workflow](.github/workflows/release.yml) is configured to build
-Linux (x86_64 and aarch64 musl), macOS (Intel and Apple Silicon), and Windows
-(x86_64) binaries, an offline source bundle, checksums, and provenance
-attestations. See [GitHub Releases](https://github.com/Azazel-Labs/twokey/releases)
-for published artifacts. Release and crates.io availability depend on publication;
-building from the checkout works independently of either. See the
-[release guide](docs/releasing.md).
+[GitHub Releases](https://github.com/Azazel-Labs/twokey/releases) provide Linux
+(x86_64 and aarch64 musl), macOS (Intel and Apple Silicon), and Windows (x86_64)
+binaries, an offline source bundle, checksums, and provenance attestations.
+See the [release guide](docs/releasing.md) for distribution and verification details.
 
 ## Quick start
 
