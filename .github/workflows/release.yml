@@ -1,0 +1,166 @@
+# Push a tag like v0.1.0 to publish a release:
+#   - prebuilt binaries: static Linux (musl, x86_64 + aarch64), macOS (arm64 +
+#     x86_64), Windows (x86_64)
+#   - a vendored source bundle that builds fully offline (no crates.io needed)
+#   - SHA256SUMS and GitHub build-provenance attestations for every file
+#   - install.sh attached for convenience
+#   - then the crate is published to crates.io via Trusted Publishing
+#
+# Asset names: <name>-<tag>-<target>.tar.gz|zip and <name>-<tag>-vendored-src.tar.gz
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  NAME: twokey # crate and binary name (keep in sync with Cargo.toml)
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml version; Cargo.lock is committed
+        run: |
+          test -f Cargo.lock || { echo "::error::commit Cargo.lock before releasing"; exit 1; }
+          v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, musl: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, musl: true }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: musl toolchain
+        if: matrix.musl
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          # tree-sitter grammars are C; compile them with musl-gcc for a fully static binary
+          t=$(echo "${{ matrix.target }}" | tr '-' '_')
+          echo "CC_$t=musl-gcc" >> "$GITHUB_ENV"
+      - name: Test (native targets only)
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: cargo test --locked --release --target ${{ matrix.target }}
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          stem="$NAME-$GITHUB_REF_NAME-${{ matrix.target }}"
+          dir="target/${{ matrix.target }}/release"
+          mkdir -p dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp "$dir/$NAME.exe" .
+            7z a "dist/$stem.zip" "$NAME.exe" README.md >/dev/null
+          else
+            cp "$dir/$NAME" .
+            tar -czf "dist/$stem.tar.gz" "$NAME" README.md
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: dist/*
+
+  vendored-source:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Vendor every dependency into the source tree
+        run: |
+          stem="$NAME-$GITHUB_REF_NAME-vendored-src"
+          mkdir -p "/tmp/$stem" dist
+          git archive HEAD | tar -x -C "/tmp/$stem"
+          cd "/tmp/$stem"
+          mkdir -p .cargo
+          cargo vendor --locked vendor > .cargo/config.toml
+          # Prove it builds with the network off.
+          cargo build --release --offline --locked
+          rm -rf target
+          cd /tmp && tar -czf "$GITHUB_WORKSPACE/dist/$stem.tar.gz" "$stem"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vendored-src
+          path: dist/*
+
+  publish-github:
+    needs: [build, vendored-source]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write # provenance
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cp install.sh dist/
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo "curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/install.sh | sh -s -- --version $GITHUB_REF_NAME"
+            echo '```'
+            echo
+            echo "Or: \`cargo binstall $NAME\`, \`cargo install $NAME\`, or build offline from \`$NAME-$GITHUB_REF_NAME-vendored-src.tar.gz\`:"
+            echo '`cargo install --path <dir> --offline --locked`.'
+            echo
+            echo "Verify any file: \`gh attestation verify <file> --repo $GITHUB_REPOSITORY\` and \`sha256sum -c SHA256SUMS\`."
+            echo
+            echo '## SHA256SUMS'
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes \
+            $(case "$GITHUB_REF_NAME" in *-*) echo --prerelease ;; esac)
+
+  # Trusted Publishing: no long-lived crates.io token in GitHub. The very first
+  # version must be published by hand (see README "Publishing"); after that,
+  # configure this repo + workflow + environment as a trusted publisher on
+  # crates.io and every tag publishes automatically.
+  publish-crates-io:
+    needs: publish-github
+    # Turn on (repo variable CRATES_IO_TRUSTED=true) once trusted publishing is set up.
+    if: vars.CRATES_IO_TRUSTED == 'true'
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

@@ -1,0 +1,45 @@
+# GitHub Action: install a released twokey binary (no crates.io, no Rust).
+#
+#   - uses: YOUR_ORG/twokey@<commit-sha>   # pin to a commit SHA
+#     with:
+#       version: v0.1.0
+#       sha256: <sha256 of twokey-v0.1.0-x86_64-unknown-linux-musl.tar.gz>
+name: Install twokey
+description: Install a pinned twokey release binary from GitHub Releases, checksum-verified.
+branding:
+  icon: shield
+  color: gray-dark
+
+inputs:
+  version:
+    description: Release tag to install, e.g. v0.1.0 (required; don't float on "latest" in CI).
+    required: true
+  sha256:
+    description: Expected SHA-256 of the archive for this runner's platform. Strongly recommended.
+    required: false
+    default: ""
+  repo:
+    description: Repository to download from.
+    required: false
+    default: YOUR_ORG/twokey
+
+outputs:
+  path:
+    description: Absolute path of the installed binary.
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        TWOKEY_VERSION: ${{ inputs.version }}
+        TWOKEY_SHA256: ${{ inputs.sha256 }}
+        TWOKEY_REPO: ${{ inputs.repo }}
+        TWOKEY_INSTALL_DIR: ${{ runner.temp }}/twokey-bin
+      run: |
+        sh "$GITHUB_ACTION_PATH/install.sh"
+        echo "$TWOKEY_INSTALL_DIR" >> "$GITHUB_PATH"
+        bin="$TWOKEY_INSTALL_DIR/twokey"; [ "$RUNNER_OS" = Windows ] && bin="$bin.exe"
+        echo "path=$bin" >> "$GITHUB_OUTPUT"

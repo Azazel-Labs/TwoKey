@@ -1,0 +1,57 @@
+[package]
+name = "twokey"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+authors = ["Nick Darnell <NickDarnell@gmail.com>"]
+description = "Guardrails for AI-authored code changes: block what agents may never touch, require named human approval for the rest. Paths, tree-sitter symbols, markers, CI and agent hooks."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/YOUR_ORG/twokey"
+homepage = "https://github.com/YOUR_ORG/twokey"
+readme = "README.md"
+keywords = ["ai", "guardrails", "code-review", "git", "tree-sitter"]
+categories = ["command-line-utilities", "development-tools"]
+# Only what's needed to build; keeps the crate small and reviewable.
+include = [
+  "/src/**",
+  "/examples/twokey.toml",
+  "/Cargo.toml",
+  "/Cargo.lock",
+  "/README.md",
+  "/LICENSE-MIT",
+  "/LICENSE-APACHE",
+]
+
+# `cargo binstall twokey` downloads the prebuilt GitHub release binary instead
+# of compiling (and never touches crates.io beyond reading this metadata).
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+globset = "0.4"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+similar = "3.2"
+toml = "1.1"
+tree-sitter = "0.27"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-ruby = "0.23"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

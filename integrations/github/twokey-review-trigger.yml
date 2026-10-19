@@ -1,0 +1,20 @@
+# .github/workflows/twokey-review-trigger.yml
+#
+# Exists only to wake up twokey.yml (via workflow_run) when a review is
+# submitted or dismissed. pull_request_review runs workflow code from the PR, so
+# this job does nothing and has no permissions; the real check runs from the
+# base branch. If a PR tampers with this file, the worst outcome is that a
+# re-run doesn't happen, and twokey denies AI changes to workflows anyway.
+name: twokey-review-trigger
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "review on PR #${{ github.event.pull_request.number }}; twokey will re-check"

@@ -1,0 +1,2 @@
+# Normalize text in Git and use LF in every checkout.
+* text=auto eol=lf
