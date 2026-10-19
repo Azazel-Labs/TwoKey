@@ -29,6 +29,8 @@ attestations. These commands require an existing release or crates.io publicatio
 |---|---|
 | Script (Linux/macOS) | `curl -fsSL https://github.com/Azazel-Labs/twokey/releases/download/v0.1.0/install.sh \| sh -s -- --version v0.1.0` |
 | Pinned checksum | add `--sha256 <hex>` (from the release's `SHA256SUMS`) |
+| Script (Windows PowerShell) | Download release asset `install.ps1`, then `./install.ps1 -Version v0.1.0` (see [README](../README.md#installation)) |
+| Windows pinned checksum | add `-Sha256 <hex>`; use `-To <directory>` for a custom destination |
 | GitHub Actions | `uses: Azazel-Labs/twokey@<commit-sha>` with `version:` and `sha256:` (see [action.yml](../action.yml)) |
 | Direct download | `https://github.com/Azazel-Labs/twokey/releases/download/<tag>/twokey-<tag>-<target>.tar.gz` |
 | Offline from source | download `twokey-<tag>-vendored-src.tar.gz`, then `cargo install --path <dir> --offline --locked` (or `install.sh --source`) |

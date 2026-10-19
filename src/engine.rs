@@ -141,7 +141,7 @@ struct Ctx<'p> {
 }
 
 impl<'p> Ctx<'p> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "Collects all finding fields in one place")]
     fn push(
         &mut self,
         rule_id: &str,
@@ -1102,6 +1102,42 @@ action = "deny"
         assert_eq!(e.verdict, Verdict::Blocked);
         assert_eq!(e.findings.iter().filter(|f| f.rule == "skips").count(), 1);
         assert_eq!(e.findings[0].line, Some(4));
+    }
+
+    #[test]
+    fn content_rule_bans_em_dashes() {
+        let policy = Policy::compile(include_str!("../examples/twokey.toml"), ".twokey.toml", "test".into()).unwrap();
+        let check = |before, after, ai| {
+            evaluate(
+                &policy,
+                &[fc("docs/guide.md", before, after)],
+                &Attribution::whole(ai, "test"),
+                &Approvals::default(),
+            )
+        };
+        for ai in [true, false] {
+            let added = check(None, Some("Heading\nUse this — carefully.\n"), ai);
+            assert_eq!(added.verdict, Verdict::Blocked);
+            assert_eq!(added.findings[0].rule, "no-em-dashes");
+            assert_eq!(added.findings[0].line, Some(2));
+            assert_eq!(
+                check(Some("Old — text.\n"), Some("New — text.\n"), ai).verdict,
+                Verdict::Blocked
+            );
+            assert_eq!(
+                check(Some("Old — text.\n"), Some("Old text.\n"), ai).verdict,
+                Verdict::Pass
+            );
+            assert_eq!(check(Some("Old — text.\n"), None, ai).verdict, Verdict::Pass);
+            assert_eq!(
+                check(Some("Old — text.\n"), Some("Old — text.\nNew text.\n"), ai).verdict,
+                Verdict::Pass
+            );
+            assert_eq!(
+                check(None, Some("Hyphen - and en dash –.\n"), ai).verdict,
+                Verdict::Pass
+            );
+        }
     }
 
     #[test]

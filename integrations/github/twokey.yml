@@ -8,8 +8,8 @@
 #  1. Copy integrations/github/run.sh to .github/twokey/run.sh.
 #  2. Copy twokey-review-trigger.yml next to this file.
 #  3. Recommended: create a GitHub App (Commit statuses: write; Pull requests:
-#     read; org Members: read for team approvers), store its id in the
-#     TWOKEY_APP_ID variable and key in the TWOKEY_APP_KEY secret of an
+#     read; org Members: read for team approvers), store its Client ID in the
+#     TWOKEY_APP_CLIENT_ID variable and key in the TWOKEY_APP_KEY secret of an
 #     environment named "twokey" limited to your protected branches.
 #  4. Branch ruleset: require status check "twokey/policy" (or
 #     "twokey/policy (<branch>)" for other bases listed in TWOKEY_BASES), with
@@ -17,7 +17,7 @@
 #     PR could post a fake status under the same name, so the App is what makes
 #     this binding.
 #
-# Pin third-party actions to commit SHAs in your copy.
+# Keep third-party actions pinned to commit SHAs when updating your copy.
 #
 # Do NOT add steps that build, test or otherwise execute PR code here.
 name: twokey
@@ -46,17 +46,17 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Check out trusted base (scripts and policy come from here)
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: App token
         id: app
-        if: ${{ vars.TWOKEY_APP_ID != '' }}
-        uses: actions/create-github-app-token@v1
+        if: ${{ vars.TWOKEY_APP_CLIENT_ID != '' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.TWOKEY_APP_ID }}
+          client-id: ${{ vars.TWOKEY_APP_CLIENT_ID }}
           private-key: ${{ secrets.TWOKEY_APP_KEY }}
           owner: ${{ github.repository_owner }}
 

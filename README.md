@@ -27,6 +27,7 @@ expressions, and change-size limits. No model or external AI service is involved
 - **Require the right reviewer:** name individuals, policy groups, or GitHub teams.
 - **Protect the policy itself:** CI reads policy from the base revision.
 - **Get feedback early:** use a Git pre-commit hook or the Claude Code integration.
+- **Enforce writing conventions:** [ban em dashes or unwanted wording](docs/configuration.md#ban-characters-or-wording) with content rules.
 - **Enforce at merge time:** combine trusted CI with a required status check.
 
 Syntax-aware rules support **Rust, Python, JavaScript, TypeScript/TSX, Go, Java,
@@ -34,7 +35,29 @@ C#, and Ruby**. Path and content rules work with other file types too.
 
 ## Installation
 
-Build from source:
+Install a published binary without a Rust toolchain:
+
+**Linux / macOS:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Azazel-Labs/twokey/main/install.sh | sh
+```
+
+**Windows (PowerShell 5.1 or newer):**
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Azazel-Labs/twokey/main/install.ps1 -OutFile install.ps1
+./install.ps1
+```
+
+Both installers verify the archive against the release's `SHA256SUMS` and default
+to `~/.local/bin`; add that directory to your `PATH`. Windows uses the x64 binary
+(ARM64 requires Windows x64 emulation). Use `-Version v0.1.0`, `-To <directory>`,
+and `-Sha256 <hex>` in PowerShell, or `--version`, `--to`, and `--sha256` in the
+shell installer, to select a release, destination, and pinned checksum. Neither
+installer needs administrator privileges when using the default directory.
+
+Alternatively, build from source on any supported platform:
 
 ```sh
 git clone https://github.com/Azazel-Labs/twokey.git
@@ -148,11 +171,17 @@ Rust 2024, minimum Rust 1.90. CI tests the minimum version and stable on Linux,
 macOS, and Windows. Keep `Cargo.lock` committed.
 
 ```sh
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
+cargo fmt --all --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked
 cargo +1.90.0 test --locked
 ```
+
+Formatting uses the Rust 2024 style edition, LF line endings, and a 120-column
+limit. Cargo defines the shared Clippy policy: default lints plus checks for
+debug macros, unfinished code, and stale lint suppressions (`#[expect]` instead
+of `#[allow]`). Unsafe code is forbidden. Clippy reads the MSRV from
+`rust-version`; CI runs it on Rust 1.90 and stable across all three platforms.
 
 Run shell integration tests on Linux or macOS (macOS requires GNU sed):
 

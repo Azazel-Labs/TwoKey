@@ -180,3 +180,18 @@ pattern = '\b(assert\w*|expect)\b'
 lines = "removed"
 action = "approve"
 reason = "Assertions were removed from tests."
+
+# ------------------------------------------------------------ writing conventions
+
+[[rule]]
+id = "no-em-dashes"
+kind = "content"
+# TOML literal strings preserve the regex's Unicode escape.
+pattern = '\x{2014}'
+lines = "added"
+action = "deny"
+# Apply the writing convention to human changes too.
+human_action = "deny"
+reason = "Use a comma, colon, parentheses, or a separate sentence instead of an em dash."
+# Omit paths to check all text files, or limit this rule to prose:
+# paths = ["*.md", "*.txt", "*.rst"]

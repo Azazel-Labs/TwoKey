@@ -10,7 +10,8 @@
 2. **Create a GitHub App** with *Commit statuses: write*, *Pull requests: read*
    and, for team approvers, organization *Members: read*. Install it on the repo.
 3. Create an environment named `twokey`, limited to your protected branches,
-   holding variable `TWOKEY_APP_ID` and secret `TWOKEY_APP_KEY`.
+   holding variable `TWOKEY_APP_CLIENT_ID` (the App's Client ID from its settings)
+   and secret `TWOKEY_APP_KEY`.
 4. Branch ruleset on `main`: require status check **`twokey/policy`** with the
    expected source set to **your App**; require PRs, dismiss stale approvals on
    push, CODEOWNERS on `.github/`, `.twokey.toml` and sub-policies.
@@ -19,7 +20,11 @@
    check only vouches for listed bases, and each base gets its own status name,
    because commit statuses belong to a commit: otherwise a second PR with the
    same head commit against a weaker branch could satisfy the check on `main`.
-6. Pin the third-party actions in your copies to commit SHAs.
+6. Keep the third-party actions pinned to commit SHAs when updating your copies.
+
+When upgrading an older copy of the template, replace `TWOKEY_APP_ID` with
+`TWOKEY_APP_CLIENT_ID` in the `twokey` environment and use the App's Client ID
+from its settings. The current token action deprecates the old `app-id` input.
 
 How it fits together:
 
