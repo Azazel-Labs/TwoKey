@@ -4,19 +4,17 @@
 
 ## Publishing (maintainers)
 
-1. Make sure `version` in `Cargo.toml` matches the tag you'll push, and that
+1. Set the GitHub Actions secret `CARGO_REGISTRY_TOKEN` to a crates.io API token
+   with permission to publish `twokey`. Store it as a repository secret or in
+   the `crates-io` environment used by the publishing job.
+2. Make sure `version` in `Cargo.toml` matches the tag you'll push, and that
    `Cargo.lock` is committed.
-2. Push the tag (`git tag v0.1.0 && git push origin v0.1.0`). The release
+3. Push the tag (`git tag v0.1.0 && git push origin v0.1.0`). The release
    workflow tests and builds every target, vendors the source and proves it
    builds offline, writes `SHA256SUMS`, attests provenance, and creates the
-   GitHub release.
-3. crates.io, first time only: `cargo login` with an API token, then
-   `cargo publish --locked` from the tag. Then, on crates.io → the crate →
-   Settings → Trusted Publishing, add this repository, workflow `release.yml`
-   and environment `crates-io`, create that environment in GitHub (require a
-   reviewer if you like), set the repository variable `CRATES_IO_TRUSTED=true`,
-   and revoke the API token. From then on every tag publishes to crates.io from
-   CI with a short-lived OIDC token; no secret is stored anywhere.
+   GitHub release, then runs `cargo publish --locked` using the token. This also
+   supports the first publication; no manual publish or Trusted Publishing
+   configuration is required. A missing token fails the job with a clear error.
 
 ## Distribution and verification
 
