@@ -5,9 +5,9 @@ edition = "2024"
 rust-version = "1.90"
 authors = ["Nick Darnell <NickDarnell@gmail.com>"]
 description = "Guardrails for AI-authored code changes: block what agents may never touch, require named human approval for the rest. Paths, tree-sitter symbols, markers, CI and agent hooks."
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/YOUR_ORG/twokey"
-homepage = "https://github.com/YOUR_ORG/twokey"
+license = "CC0-1.0"
+repository = "https://github.com/Azazel-Labs/twokey"
+homepage = "https://github.com/Azazel-Labs/twokey"
 readme = "README.md"
 keywords = ["ai", "guardrails", "code-review", "git", "tree-sitter"]
 categories = ["command-line-utilities", "development-tools"]
@@ -18,8 +18,9 @@ include = [
   "/Cargo.toml",
   "/Cargo.lock",
   "/README.md",
-  "/LICENSE-MIT",
-  "/LICENSE-APACHE",
+  "/LICENSE",
+  "/docs/**",
+  "/examples/minimal.toml",
 ]
 
 # `cargo binstall twokey` downloads the prebuilt GitHub release binary instead

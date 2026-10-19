@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install twokey from GitHub Releases. No crates.io, no Rust toolchain needed.
 #
-#   curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/twokey/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Azazel-Labs/twokey/main/install.sh | sh
 #   curl -fsSL .../install.sh | sh -s -- --version v0.1.0 --to /usr/local/bin
 #
 # Options (or env vars):
@@ -19,7 +19,7 @@
 set -eu
 
 NAME="twokey"
-REPO="${TWOKEY_REPO:-YOUR_ORG/twokey}"
+REPO="${TWOKEY_REPO:-Azazel-Labs/twokey}"
 GH="${TWOKEY_GITHUB:-https://github.com}"
 VERSION="${TWOKEY_VERSION:-}"
 DEST="${TWOKEY_INSTALL_DIR:-$HOME/.local/bin}"

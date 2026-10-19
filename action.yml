@@ -1,6 +1,6 @@
 # GitHub Action: install a released twokey binary (no crates.io, no Rust).
 #
-#   - uses: YOUR_ORG/twokey@<commit-sha>   # pin to a commit SHA
+#   - uses: Azazel-Labs/twokey@<commit-sha>   # pin to a commit SHA
 #     with:
 #       version: v0.1.0
 #       sha256: <sha256 of twokey-v0.1.0-x86_64-unknown-linux-musl.tar.gz>
@@ -21,7 +21,7 @@ inputs:
   repo:
     description: Repository to download from.
     required: false
-    default: YOUR_ORG/twokey
+    default: Azazel-Labs/twokey
 
 outputs:
   path:

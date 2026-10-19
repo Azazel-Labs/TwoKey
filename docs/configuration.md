@@ -1,0 +1,62 @@
+# Configuration
+
+[Back to README](../README.md)
+
+## Deciding what's "AI"
+
+Per commit in the range, from `[ai]`:
+
+- trailers (`Co-authored-by: Claude …`, `Assisted-by:`, `Generated-by:`)
+- author/committer identities (`noreply@anthropic.com`, `[bot]`)
+- branch name (`claude/…`, `codex/…`, `agent/…`)
+- env vars for local checks (`CLAUDECODE`, `TWOKEY_AI`)
+
+A finding is AI-attributed if any AI commit in the range touched that file, so a
+human commit in the same PR isn't blocked by an agent's commit elsewhere.
+
+These signals are only as honest as the agent. To fail closed, use one of:
+
+- `require_signed_human = true` (+ `human_signing_keys`): a commit is human only
+  if it carries a good signature from a trusted key. Give agents no signing key.
+- `assume_ai = true`: everything is AI; human-only lanes pass `--human`.
+
+## Approvals
+
+`approve` findings list who can approve: logins, `group:name` from
+`[approvals.groups]`, or GitHub teams (`team:org/slug` / `@org/slug`), falling
+back to `[approvals] approvers`, falling back to anyone. CI passes the logins
+that approved **this exact head commit** via `--approver` / `TWOKEY_APPROVERS`,
+and team membership via `--teams-file` (`twokey teams` lists which teams the
+policy uses). The provided runner excludes the PR author and bot accounts.
+`deny` findings can't be approved away: a human has to make that change in a
+commit that isn't AI-attributed.
+
+## Monorepos
+
+`settings.include = ["services/*/.twokey.toml"]` pulls in per-directory
+policies. A sub-policy may only contain `[[rule]]` tables; its paths are relative
+to its directory (no `paths` = the whole directory), its rule ids are prefixed
+with the directory, and it can't change attribution, approvals, limits or
+anything else in the root policy. Rules only add findings, so a team can tighten
+its own directory but never loosen anyone else's. Sub-policy files are protected
+like the root policy.
+
+## Policy reference
+
+See [complete example](../examples/twokey.toml) for a commented, complete policy. Rule fields:
+
+```toml
+[[rule]]
+id = "unique-id"
+kind = "path" | "symbol" | "query" | "content"
+action = "deny" | "approve" | "warn" | "allow"   # for AI changes (default approve)
+human_action = "allow"                           # for human changes (default allow)
+paths = ["/src/auth/**", "*.pem"]                # leading / anchors; no slash = any depth
+exclude = ["**/fixtures/**"]
+on = ["added", "modified", "deleted"]            # default: all
+approvers = ["group:security", "alice"]
+reason = "shown to reviewers and to the agent"
+# symbol:  symbols = ["verify_*", "Session::*"]   language = "rust" (optional)
+# query:   language = "rust"  query = "(unsafe_block) @protect"  capture = "protect"
+# content: pattern = '#\[ignore\]'  lines = "added" | "removed" | "both"
+```

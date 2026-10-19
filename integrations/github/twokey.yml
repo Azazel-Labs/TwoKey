@@ -85,7 +85,7 @@ jobs:
         if: steps.pr.outputs.numbers != ''
         # Pin the action to a commit SHA, and the archive to its sha256 (from the
         # release's SHA256SUMS), so a replaced release can't run here.
-        uses: YOUR_ORG/twokey@COMMIT_SHA
+        uses: Azazel-Labs/twokey@COMMIT_SHA
         with:
           version: v0.1.0
           sha256: "<sha256 of twokey-v0.1.0-x86_64-unknown-linux-musl.tar.gz>"
