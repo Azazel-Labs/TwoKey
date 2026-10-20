@@ -9,7 +9,7 @@
    the `crates-io` environment used by the publishing job.
 2. Make sure `version` in `Cargo.toml` matches the tag you'll push, and that
    `Cargo.lock` is committed.
-3. Push the tag (`git tag v0.1.0 && git push origin v0.1.0`). The release
+3. Push the tag (`git tag v0.2.0 && git push origin v0.2.0`). The release
    workflow tests and builds every target, vendors the source and proves it
    builds offline, writes `SHA256SUMS`, attests provenance, and creates the
    GitHub release, then runs `cargo publish --locked` using the token. This also
@@ -25,9 +25,9 @@ attestations. These commands require an existing release or crates.io publicatio
 
 | How | Command |
 |---|---|
-| Script (Linux/macOS) | `curl -fsSL https://github.com/Azazel-Labs/twokey/releases/download/v0.1.0/install.sh \| sh -s -- --version v0.1.0` |
+| Script (Linux/macOS) | `curl -fsSL https://github.com/Azazel-Labs/twokey/releases/download/v0.2.0/install.sh \| sh -s -- --version v0.2.0` |
 | Pinned checksum | add `--sha256 <hex>` (from the release's `SHA256SUMS`) |
-| Script (Windows PowerShell) | Download release asset `install.ps1`, then `./install.ps1 -Version v0.1.0` (see [README](../README.md#installation)) |
+| Script (Windows PowerShell) | Download release asset `install.ps1`, then `./install.ps1 -Version v0.2.0` (see [README](../README.md#installation)) |
 | Windows pinned checksum | add `-Sha256 <hex>`; use `-To <directory>` for a custom destination |
 | GitHub Actions | `uses: Azazel-Labs/twokey@<commit-sha>` with `version:` and `sha256:` (see [action.yml](../action.yml)) |
 | Direct download | `https://github.com/Azazel-Labs/twokey/releases/download/<tag>/twokey-<tag>-<target>.tar.gz` |

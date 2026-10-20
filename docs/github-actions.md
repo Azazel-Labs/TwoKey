@@ -13,8 +13,8 @@ human reviews; approving a PR does not override a twokey denial.
 2. Copy [run.sh](../integrations/github/run.sh) to `.github/twokey/run.sh` and
    [twokey.yml](../integrations/github/twokey.yml) to `.github/workflows/twokey.yml`.
    Set the action commit SHA, CLI version, and Linux x86_64 musl archive checksum
-   from the chosen release's `SHA256SUMS`. Use a release containing this policy
-   model; releases through v0.1.2 still contain the old approval model.
+   from the chosen release's `SHA256SUMS`. Use v0.2.0 or newer for this policy
+   model; releases through v0.1.2 contain the old approval model.
 3. Create a GitHub environment named `twokey`, limited to protected base branches.
    The workflow uses `GITHUB_TOKEN` by default. Keep `TWOKEY_DRY_RUN` unset or
    `false` for enforcement.

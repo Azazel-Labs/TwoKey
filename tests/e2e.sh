@@ -33,6 +33,8 @@ command -v gsed >/dev/null && sed() { gsed "$@"; }   # macOS: GNU sed needed for
 
 # Exercise the opt-in samples; the shipped starter keeps them disabled.
 sed '/^# \[\[rule\]\]/,$s/^# //' "$ROOT/examples/twokey.toml" > .twokey.toml
+# Fix the fixture declaration independently of the starter's chosen marker.
+sed -i 's/^human_marker = .*/human_marker = "Human-Authored: true"/' .twokey.toml
 mkdir -p src/auth src/crypto .github/workflows migrations tests
 cat > src/auth/mod.rs <<'EOF'
 pub struct Session { token: String }

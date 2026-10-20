@@ -35,8 +35,8 @@ C#, and Ruby**. Path and content rules work with other file types too.
 
 ## Installation
 
-The approval-free enforcement model described here is unreleased. Published
-versions through v0.1.2 still use the old model; see the
+Version 0.2.0 introduces the approval-free enforcement model. Upgrading from
+v0.1.2 or earlier requires policy changes; see the
 [migration notes](docs/configuration.md#migrating-from-the-approval-model).
 
 Use the **GitHub Action for CI** or **Cargo for local development**.
@@ -50,7 +50,7 @@ toolchain or compilation:
 - name: Install twokey
   uses: Azazel-Labs/TwoKey@6ebf78b9bdcfa412df2b505fea00a6f4bd495a77 # v0.1.1
   with:
-    version: v0.1.1
+    version: v0.2.0
 
 - run: twokey --version
 ```
@@ -60,7 +60,7 @@ The [Install twokey action](action.yml) verifies the release checksum and adds
 platforms listed below. The `uses` SHA pins the installer code; `version` selects
 the CLI release. For a pinned archive checksum too, set the `sha256` input to the
 matching platform's entry in the release's
-[SHA256SUMS](https://github.com/Azazel-Labs/TwoKey/releases/download/v0.1.1/SHA256SUMS).
+[SHA256SUMS](https://github.com/Azazel-Labs/TwoKey/releases/download/v0.2.0/SHA256SUMS).
 
 To **enforce policy on pull requests**, follow the [GitHub Actions setup guide](docs/github-actions.md).
 It supplies the trusted workflow and runner that read policy from the base
@@ -78,7 +78,7 @@ cargo install twokey --locked
 twokey --version
 ```
 
-To select a specific release, use `cargo install twokey --version 0.1.1 --locked`.
+To select a specific release, use `cargo install twokey --version 0.2.0 --locked`.
 Cargo builds the CLI locally, requiring **Rust 1.90 or newer** and a C compiler
 for the tree-sitter grammars. On Windows, use MSVC with Visual Studio C++ Build
 Tools. Git is required when using twokey. Continue with the [quick start](#quick-start)
@@ -101,7 +101,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/Azazel-Labs/twokey/main/inst
 
 Both installers verify the archive against the release's `SHA256SUMS` and default
 to `~/.local/bin`; add that directory to your `PATH`. Windows uses the x64 binary
-(ARM64 requires Windows x64 emulation). Use `-Version v0.1.1`, `-To <directory>`,
+(ARM64 requires Windows x64 emulation). Use `-Version v0.2.0`, `-To <directory>`,
 and `-Sha256 <hex>` in PowerShell, or `--version`, `--to`, and `--sha256` in the
 shell installer, to select a release, destination, and pinned checksum. Neither
 installer needs administrator privileges when using the default directory.

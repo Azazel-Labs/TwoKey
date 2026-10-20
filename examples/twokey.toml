@@ -37,7 +37,7 @@ trailers = [
 ]
 
 ## Choose the literal marker for fully human commits (not a regex).
-human_marker = "#Human"  # alternatively: "#Human"
+human_marker = "#Human"  # alternatively: "Human-Authored: true"
 ## Put your marker on its own line after a blank line at the end of the message.
 ## Explicit AI signals still win over that declaration.
 ## With assume_ai = false, only these signals identify AI; unmatched changes
