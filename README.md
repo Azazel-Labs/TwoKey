@@ -1,6 +1,6 @@
 # twokey
 
-**Keep AI changes out of the code that matters.**
+**Let AI write code. Decide what it cannot change.**
 
 [![CI](https://github.com/Azazel-Labs/twokey/actions/workflows/ci.yml/badge.svg)](https://github.com/Azazel-Labs/twokey/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Azazel-Labs/twokey)](https://github.com/Azazel-Labs/twokey/releases)
@@ -12,26 +12,188 @@
 
 English · [Español](docs/i18n/README.es.md) · [Français](docs/i18n/README.fr.md) · [Deutsch](docs/i18n/README.de.md) · [日本語](docs/i18n/README.ja.md) · [简体中文](docs/i18n/README.zh-CN.md)
 
-[Quick start](#quick-start) · [Configuration](docs/configuration.md) · [GitHub Actions](docs/github-actions.md) · [Security model](docs/security.md) · [Contributing](#contributing)
+[Use cases](#what-would-you-protect) · [Quick start](#quick-start) · [Installation](#installation) · [Configuration](docs/configuration.md) · [GitHub Actions](docs/github-actions.md) · [Security model](docs/security.md) · [Contributing](#contributing)
 
-twokey checks code changes against your repository's policy and blocks
-AI-attributed edits to protected code. Protect entire files, specific functions,
-syntax patterns, or marked regions. Human reviews and merge permissions stay in
-GitHub; an approval cannot override a twokey denial.
+An agent fixes a bug by weakening the test. A refactor touches token validation.
+A quick cleanup edits a migration that already ran in production.
 
-Checks are deterministic: file patterns, syntax trees, source markers, regular
-expressions, and change-size limits. No model or external AI service is involved.
+**twokey turns "don't touch that" into a repository policy you can check.** Give
+AI room to work while keeping your authentication logic, existing tests, release
+workflows, or a few critical lines off limits. Choose the boundaries in
+`.twokey.toml`, get feedback locally, and require a passing check before merging.
 
-## Features
+- **Protect a function without freezing the file.** Tree-sitter rules identify
+  named functions and methods, so nearby code can still change.
+- **Keep the tests that define correct behavior.** Allow new tests while blocking
+  AI edits to existing ones, or catch newly added test skips.
+- **Make the boundary survive the PR.** CI reads the policy from the target
+  branch, so a PR cannot relax its own checks.
+- **Use the model you want.** Untagged changes default to AI, including changes
+  from local models that leave no attribution metadata.
 
-- **Protect sensitive code:** match files, functions, classes, or syntax patterns.
-- **Protect the policy itself:** CI reads policy from the base revision.
-- **Get feedback early:** use a Git commit-msg hook or the Claude Code integration.
-- **Enforce writing conventions:** [ban em dashes or unwanted wording](docs/configuration.md#ban-characters-or-wording) with content rules.
-- **Enforce at merge time:** combine trusted CI with a required status check.
+Checks run locally with file patterns, syntax trees, markers, and regexes.
+No model calls, API keys, or code uploads to an AI service. GitHub continues to
+handle reviews and merge permissions.
+
+## What would you protect?
+
+| Let AI work on… | Keep it away from… | Policy to use |
+| --- | --- | --- |
+| Login UI and error messages | Token validation and permission checks | Named symbols |
+| A bug fix and new regression tests | Rewriting existing tests to make the fix pass | Symbols with `on = ["modified", "deleted"]` |
+| A new database migration | Editing migrations already applied in production | Paths with `on = ["modified", "deleted"]` |
+| Application features | CI, release workflows, dependency files, or cryptography | File and directory paths |
+| The surrounding implementation | A reviewed calculation or fixed protocol constant | `twokey:lock` markers |
+| Documentation | Em dashes or wording you do not want added | Content regexes |
+
+These are choices you make for your repository. The starter's example rules are
+commented out; enable the ones you want and adapt their paths.
+
+### Keep authentication logic human-written
+
+Add this rule to `.twokey.toml`:
+
+```toml
+[[rule]]
+id = "token-validation"
+kind = "symbol"
+paths = ["/src/auth/**"]
+symbols = ["verify_token", "Session::verify"]
+action = "deny"
+reason = "Token validation must be changed by a human."
+```
+
+Inside `impl Session`, an AI change like this is blocked:
+
+```diff
+ pub fn verify(&self) -> bool {
+-    self.token.len() == 32
++    true
+ }
+```
+
+An edit to an unprotected `greeting()` function in the same file can pass this
+rule. Renaming or deleting the protected function is caught too. For code whose
+imports and helpers also need protection, use a path rule for the entire module.
+
+### Let AI add tests without rewriting existing ones
+
+```toml
+[[rule]]
+id = "existing-rust-tests"
+kind = "symbol"
+paths = ["**/*.rs"]
+symbols = ["tests::*"]
+on = ["modified", "deleted"]
+action = "deny"
+reason = "Add regression tests; preserve existing test behavior."
+```
+
+This protects existing functions in Rust `tests` modules. Adding a new test is
+allowed by this rule; changing an existing assertion or deleting a test is not.
+The [starter policy](examples/twokey.toml) also has examples for Python and Go
+tests, test skips, and removed assertions.
+
+### Lock a few critical lines
+
+Put markers around a region you want AI to leave alone:
+
+```rust
+// twokey:lock-begin transfer limit agreed with compliance
+pub const MAX_TRANSFER: u64 = 10_000;
+// twokey:lock-end
+```
+
+Markers are enabled by default and read from the base revision. Changing the
+constant or deleting the markers is blocked for AI. No separate path rule is
+needed for this region.
+
+### Keep writing conventions out of review comments
+
+```toml
+[[rule]]
+id = "no-em-dashes"
+kind = "content"
+paths = ["*.md"]
+pattern = '\x{2014}'
+lines = "added"
+action = "deny"
+human_action = "deny"
+reason = "Use a comma, colon, parentheses, or a separate sentence."
+```
+
+This rejects em dashes on added or replacement Markdown lines, including human
+changes. Existing untouched lines are left alone. Omit `human_action` to apply
+it only to AI changes, or adapt the regex to catch unwanted wording.
 
 Syntax-aware rules support **Rust, Python, JavaScript, TypeScript/TSX, Go, Java,
 C#, and Ruby**. Path and content rules work with other file types too.
+See the [full rule reference](docs/configuration.md#policy-reference) for more.
+
+## Quick start
+
+[Install the CLI](#installation), then run this inside the Git repository you
+want to protect:
+
+```sh
+twokey init
+```
+
+Open `.twokey.toml`, uncomment the complete `[[rule]]` blocks you want, and adapt
+their paths. The [example policy](examples/twokey.toml) includes file, symbol,
+content, and syntax rules, all commented out by default. Optional size limits
+are also commented out. Built-in policy/wiring protection, source markers, and
+default symlink/submodule/mode-change protections remain enabled.
+
+Validate and preview your choices:
+
+```sh
+twokey validate --policy .twokey.toml
+twokey scan --policy .twokey.toml
+twokey check --staged --policy .twokey.toml --dry-run
+```
+
+`--dry-run` reports without blocking. `scan` examines committed files at `HEAD`,
+so the repository needs a commit. Commit the policy before enabling enforcement.
+
+### Declare a fully human change
+
+Choose the human declaration in `.twokey.toml`:
+
+```toml
+[ai]
+human_marker = "#Human" # selected by twokey init; choose your own marker
+```
+
+**Changes are assumed to involve AI by default**, even when the model leaves no
+attribution tags. For a change written entirely by a human, add this trailer at
+the end of the commit message, separated from the subject/body by a blank line:
+
+```text
+Fix token validation
+
+#Human
+```
+
+With the starter policy:
+
+```sh
+git commit -m "Fix token validation" -m "#Human"
+```
+
+The marker matches a whole line, case-insensitively, in the final paragraph.
+You can choose another literal marker, such as `Human-Authored: true`. With a
+`#` marker, configure
+`git config core.commentChar ';'` when using Git's editor, so Git keeps the marker
+instead of treating it as a comment.
+
+Use the declaration only for fully human work, including the initial policy setup
+when written by a human. AI-assisted or mixed work keeps the default AI treatment.
+AI author/message signals and agent branch names still take precedence. A human
+commit cannot clear AI attribution from an earlier commit touching the same file
+in the PR. Preserve declarations when rewriting or squashing commits.
+
+This is a declaration, not proof of authorship; see [attribution configuration](docs/configuration.md#deciding-whats-ai).
 
 ## Installation
 
@@ -120,70 +282,6 @@ cargo install --path . --locked
 (x86_64 and aarch64 musl), macOS (Intel and Apple Silicon), and Windows (x86_64)
 binaries, an offline source bundle, checksums, and provenance attestations.
 See the [release guide](docs/releasing.md) for distribution and verification details.
-
-## Quick start
-
-Generate the starter policy:
-
-```sh
-twokey init
-```
-
-Open `.twokey.toml`, uncomment the complete `[[rule]]` blocks you want, and adapt
-their paths. The [example policy](examples/twokey.toml) includes file, symbol,
-content, and syntax rules, all commented out by default. Optional size limits
-are also commented out. Built-in policy/wiring protection, source markers, and
-default symlink/submodule/mode-change protections remain enabled.
-
-Validate and preview your choices:
-
-```sh
-twokey validate --policy .twokey.toml
-twokey scan --policy .twokey.toml
-twokey check --staged --policy .twokey.toml --dry-run
-```
-
-`--dry-run` reports without blocking. `scan` examines committed files at `HEAD`,
-so the repository needs a commit. Commit the policy before enabling enforcement.
-
-### Declare a fully human change
-
-Choose the human declaration in `.twokey.toml`:
-
-```toml
-[ai]
-human_marker = "Human-Authored: true" # or "#Human", or your own literal marker
-```
-
-**Changes are assumed to involve AI by default**, even when the model leaves no
-attribution tags. For a change written entirely by a human, add this trailer at
-the end of the commit message, separated from the subject/body by a blank line:
-
-```text
-Fix token validation
-
-Human-Authored: true
-```
-
-With the default marker:
-
-```sh
-git commit -m "Fix token validation" -m "Human-Authored: true"
-```
-
-For `human_marker = "#Human"`, use `git commit -m "Fix token validation" -m "#Human"`.
-The marker matches a whole line, case-insensitively, in the final paragraph.
-Changing it replaces the default declaration. With a `#` marker, configure
-`git config core.commentChar ';'` when using Git's editor, so Git keeps the marker
-instead of treating it as a comment.
-
-Use the declaration only for fully human work, including the initial policy setup
-when written by a human. AI-assisted or mixed work keeps the default AI treatment.
-AI author/message signals and agent branch names still take precedence. A human
-commit cannot clear AI attribution from an earlier commit touching the same file
-in the PR. Preserve declarations when rewriting or squashing commits.
-
-This is a declaration, not proof of authorship; see [attribution configuration](docs/configuration.md#deciding-whats-ai).
 
 ## Require twokey before merging on GitHub
 
@@ -289,8 +387,7 @@ commands, reviewer lists, or groups.
 | Claude Code | Merge [hook settings](integrations/claude/settings.json) into `.claude/settings.json` | Check edits and report protected changes after shell commands |
 
 Local hooks can be bypassed. Trusted CI, branch protection, and restricted agent
-credentials provide enforcement. Metadata-based AI attribution is a heuristic;
-use stricter attribution settings when needed. Read the
+credentials provide enforcement. The human marker is a declaration, not proof of who wrote the code. Read the
 [security model](docs/security.md) before relying on merge protection.
 
 ## Documentation
