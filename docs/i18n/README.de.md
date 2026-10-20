@@ -1,10 +1,10 @@
 # twokey
 
-**Menschliche Freigabe für wichtigen Code.**
+**Geschützten Code vor KI-Änderungen bewahren.**
 
 [English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
 
-twokey prüft Codeänderungen anhand der Richtlinien deines Repositorys. Es kann KI zugeordnete Änderungen an geschützten Dateien blockieren oder die Freigabe bestimmter Personen verlangen. Die Prüfungen sind deterministisch und verwenden kein KI-Modell.
+twokey blockiert KI-zugeordnete Änderungen an geschützten Dateien, Funktionen und Bereichen. Die Prüfungen sind deterministisch und verwenden keine KI-Modelle. Menschliche Reviews verwaltet GitHub; twokey hat keine Benutzer, Gruppen oder Freigaben.
 
 ## Installation
 
@@ -18,7 +18,7 @@ cargo install --path . --locked
 
 ## Schnellstart
 
-Kopiere das [minimale Beispiel](../../examples/minimal.toml) als `.twokey.toml` in das Stammverzeichnis deines Repositorys. Ersetze `your-github-login` durch den GitHub-Benutzernamen der prüfenden Person und passe die Pfade an. Das Beispiel blockiert KI-Änderungen an der CI-Konfiguration und verlangt eine Prüfung für `/src/auth/**`.
+Erstelle mit `twokey init` die [Startkonfiguration](../../examples/twokey.toml). Entferne die Kommentarzeichen bei den gewünschten Regeln und passe ihre Pfade an. Änderungen gelten standardmäßig als KI-gestützt; vollständig menschliche Commits deklarieren `Human-Authored: true` am Ende der Commit-Nachricht nach einer Leerzeile.
 
 ```sh
 twokey validate --policy .twokey.toml

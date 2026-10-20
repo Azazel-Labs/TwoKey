@@ -3,13 +3,12 @@
 //! ```text
 //! // twokey:lock-begin  reason text      (AI may never change this region)
 //! // twokey:lock-end
-//! # twokey:review-begin reason text      (AI changes need human approval)
-//! # twokey:review-end
 //! /* twokey:lock-file */                  (whole file)
 //! ```
 //!
 //! Markers are always read from the *base* version, so deleting a marker is itself
 //! a change to the protected region rather than a way around it.
+//! Legacy `review` markers are treated as locks so they cannot silently lose protection.
 
 use regex::Regex;
 use similar::{DiffTag, TextDiff};
@@ -18,14 +17,12 @@ use std::sync::OnceLock;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkerKind {
     Lock,
-    Review,
 }
 
 impl MarkerKind {
     pub fn name(self) -> &'static str {
         match self {
             MarkerKind::Lock => "lock",
-            MarkerKind::Review => "review",
         }
     }
 }
@@ -73,11 +70,7 @@ pub fn scan(text: &str) -> Scan {
     for (i, line) in text.lines().enumerate() {
         let ln = i + 1;
         if let Some(c) = marker_re().captures(line) {
-            let kind = if c[1].eq_ignore_ascii_case("lock") {
-                MarkerKind::Lock
-            } else {
-                MarkerKind::Review
-            };
+            let kind = MarkerKind::Lock;
             let reason = clean_reason(c.get(3).map(|m| m.as_str()).unwrap_or(""));
             match c[2].to_ascii_lowercase().as_str() {
                 "file" => s.file.push((kind, ln, reason)),

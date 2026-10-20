@@ -1,9 +1,8 @@
 //! Agent hook mode (Claude Code `PreToolUse` / `PostToolUse`).
 //!
 //! PreToolUse: simulates the pending edit in memory, runs it through the same
-//! rules as CI and answers `deny` (never allowed for AI) or `ask` (a human must
-//! approve), so the agent learns about a protected area before it spends a whole
-//! session on it.
+//! rules as CI and denies protected edits, so the agent learns about a
+//! protected area before it spends a whole session on it.
 //!
 //! PostToolUse on Bash: shell commands can write files directly (`sed -i`, `>`,
 //! code generators), which no PreToolUse check can predict. So before each Bash
@@ -14,7 +13,7 @@
 
 use crate::attribution::{Force, for_local};
 use crate::config::{self, PolicyArgs};
-use crate::engine::{Approvals, Evaluation, Verdict, evaluate};
+use crate::engine::{Evaluation, Verdict, evaluate};
 use crate::git::{FileChange, Repo, Status};
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -39,7 +38,6 @@ struct HookInput {
 
 enum Decision {
     Pass,
-    Ask(String),
     Deny(String),
     /// PostToolUse: feed back to the agent as a blocking error.
     PostBlock(String),
@@ -52,7 +50,6 @@ enum Decision {
 fn emit(d: Decision, event: &str) {
     let out = match d {
         Decision::Pass => return,
-        Decision::Ask(r) => pre("ask", r),
         Decision::Deny(r) => pre("deny", r),
         Decision::PostBlock(r) => json!({ "decision": "block", "reason": r }),
         Decision::PostContext(c) => json!({
@@ -84,11 +81,10 @@ pub fn run_claude(repo_hint: &Path, policy_args: &PolicyArgs) -> Result<i32> {
     let is_post = is_post_event(&event);
     let decision = match decide(&buf, repo_hint, policy_args) {
         Ok(d) => d,
-        // After the fact we can only inform; before, fail closed but not stuck:
-        // a human gets asked.
+        // After the fact we can only inform; before, fail closed.
         Err(e) if is_post => Decision::PostContext(format!("twokey could not check this command's effects ({e:#}).")),
-        Err(e) => Decision::Ask(format!(
-            "twokey could not evaluate this action ({e:#}); a human should review it."
+        Err(e) => Decision::Deny(format!(
+            "twokey could not evaluate this action ({e:#}); the check must succeed before this action can proceed."
         )),
     };
     emit(decision, &event);
@@ -158,8 +154,8 @@ fn decide(input: &str, repo_hint: &Path, policy_args: &PolicyArgs) -> Result<Dec
                         t.display()
                     )));
                 }
-                return Ok(Decision::Ask(format!(
-                    "twokey: {} is agent configuration outside any repository; a human should confirm this edit.",
+                return Ok(Decision::Deny(format!(
+                    "twokey: {} is agent configuration outside any repository; a human must make this edit.",
                     t.display()
                 )));
             }
@@ -177,7 +173,7 @@ fn decide(input: &str, repo_hint: &Path, policy_args: &PolicyArgs) -> Result<Dec
     {
         policy = config::load(&repo, policy_args, Some(&sha))?;
     }
-    let att = for_local(&policy.ai, repo.current_branch().as_deref(), Force::Ai, true);
+    let att = for_local(&policy.ai, repo.current_branch().as_deref(), Force::Ai, true, None);
 
     if hi.tool_name == "Bash" {
         let snap = snapshot_path(&repo, hi.tool_use_id.as_deref());
@@ -192,7 +188,7 @@ fn decide(input: &str, repo_hint: &Path, policy_args: &PolicyArgs) -> Result<Dec
         // PreToolUse: remember what was already flagged before this command runs.
         // Best effort: a snapshot failure must never block an ordinary command.
         if let (Some(p), Ok(changes)) = (&snap, worktree_changes(&repo)) {
-            let before = evaluate(&policy, &changes, &att, &Approvals::default());
+            let before = evaluate(&policy, &changes, &att);
             let keys = finding_keys(&before, &changes);
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
@@ -237,7 +233,7 @@ fn decide(input: &str, repo_hint: &Path, policy_args: &PolicyArgs) -> Result<Dec
     if changes.is_empty() {
         return Ok(Decision::Pass);
     }
-    let eval = evaluate(&policy, &changes, &att, &Approvals::default());
+    let eval = evaluate(&policy, &changes, &att);
     Ok(to_decision(&eval))
 }
 
@@ -308,7 +304,7 @@ fn post_bash(
         ));
     }
     let changes = worktree_changes(repo)?;
-    let after = evaluate(policy, &changes, att, &Approvals::default());
+    let after = evaluate(policy, &changes, att);
     if !after.enforced {
         return Ok(Decision::Pass);
     }
@@ -330,11 +326,6 @@ fn post_bash(
         .filter(|f| f.action == crate::config::Action::Deny)
         .map(line)
         .collect();
-    let review: Vec<String> = new
-        .iter()
-        .filter(|f| f.action != crate::config::Action::Deny)
-        .map(line)
-        .collect();
     if !denied.is_empty() {
         // Careful wording: a person may have edited these files while the command
         // ran, and the agent must not destroy their work.
@@ -343,10 +334,7 @@ fn post_bash(
             denied.join("\n")
         )));
     }
-    Ok(Decision::PostContext(format!(
-        "twokey: that command changed protected code; the pull request will need human approval for:\n{}",
-        review.join("\n")
-    )))
+    Ok(Decision::Pass)
 }
 
 fn to_decision(e: &Evaluation) -> Decision {
@@ -373,10 +361,6 @@ fn to_decision(e: &Evaluation) -> Decision {
         Verdict::Pass => Decision::Pass,
         Verdict::Blocked => Decision::Deny(format!(
             "twokey: this change touches areas AI agents may not modify:\n{}\nDo not try to work around this (other tools, renames, symlinks, generated files). Stop and tell the user what change is needed so a human can make it.",
-            lines.join("\n")
-        )),
-        Verdict::NeedsApproval => Decision::Ask(format!(
-            "twokey: this change touches protected code that needs human approval:\n{}\nApproving here lets the edit proceed locally; the pull request will still require approval from the listed reviewers.",
             lines.join("\n")
         )),
     }

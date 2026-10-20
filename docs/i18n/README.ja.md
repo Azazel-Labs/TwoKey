@@ -1,10 +1,10 @@
 # twokey
 
-**重要なコードの変更に、人間の承認を。**
+**保護されたコードへのAIによる変更を防ぎます。**
 
 [English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
 
-twokey はリポジトリのポリシーに従ってコード変更を検査する CLI ツールです。AI による変更と判定された編集を保護対象のファイルで禁止したり、指定した人の承認を必須にしたりできます。検査は決定的で、AI モデルを使用しません。
+twokey は、AIによるものと判定された変更が保護対象のファイル、関数、領域に及ぶことを防ぎます。チェックは決定的で、AIモデルを使用しません。人間のレビューはGitHubが管理し、twokeyにはユーザー、グループ、承認の仕組みはありません。
 
 ## インストール
 
@@ -18,7 +18,7 @@ cargo install --path . --locked
 
 ## クイックスタート
 
-[最小構成の例](../../examples/minimal.toml)をリポジトリのルートに `.twokey.toml` としてコピーします。`your-github-login` を承認者の GitHub ユーザー名に置き換え、パスを調整してください。この例は AI による CI 設定の変更を禁止し、`/src/auth/**` の変更に承認を要求します。
+`twokey init` で[初期設定](../../examples/twokey.toml)を作成し、必要なルールのコメントを解除してパスを調整してください。変更はデフォルトでAIによるものとして扱います。完全に人間が書いたコミットには、メッセージ末尾に空行を挟んで `Human-Authored: true` を記載します。
 
 ```sh
 twokey validate --policy .twokey.toml

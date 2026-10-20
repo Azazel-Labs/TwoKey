@@ -4,11 +4,15 @@
 
 ## Threat model and hardening notes
 
+Untagged changes default to AI. The configured `[ai].human_marker` is a self-declaration,
+not identity verification: an agent can forge it. Explicit AI signals still win.
+GitHub review requirements remain separate from attribution.
+
 Things twokey does on purpose:
 
 - **Policy from the base revision**, never from the PR.
 - **twokey's own config is always off limits to AI**, by built-in rules no policy
-  can remove (humans need approval):
+  can remove (human changes are governed by repository rules):
   - `twokey-policy`: every `.twokey.toml` anywhere, included sub-policies,
     `.twokey/**`, the CI runner `.github/twokey/**`, plus `settings.protect`.
   - `twokey-wiring`: any CI, git-hook or agent config file (`.github/workflows`,
@@ -40,7 +44,6 @@ Things twokey does on purpose:
 - The hook denies edits inside any `.git` directory, finds the repo from the
   file being edited, prefers the policy at `settings.default_base`, and on
   `git commit` checks the index as well as the working tree.
-- Approver groups that resolve to nobody are an error, never "anyone".
 
 Things you still need around it:
 
@@ -48,7 +51,8 @@ Things you still need around it:
   `pull_request_target` so the workflow file comes from the base branch and
   installs twokey from a pinned release; it never executes PR code. Combine with
   branch protection, required status checks, CODEOWNERS on `.github/`, and
-  "dismiss stale approvals on new commits".
+  any human-review requirements you choose in GitHub. Reviews do not bypass a
+  twokey denial.
 - **Give the agent a token that can't change rulesets, workflows or secrets, and
   can't approve PRs.**
 - The hook's Bash check runs *after* the command (including failed commands,

@@ -54,8 +54,6 @@ pub struct CommitInfo {
     pub parents: Vec<String>,
     pub author: String,
     pub committer: String,
-    pub sig_status: String,
-    pub sig_key: String,
     pub subject: String,
     pub body: String,
 }
@@ -120,6 +118,27 @@ impl Repo {
 
     pub fn git_str(&self, args: &[&str]) -> Result<String> {
         Ok(String::from_utf8_lossy(&self.git(args)?).trim().to_string())
+    }
+
+    /// Normalize editor comments and whitespace just as Git's strip cleanup does.
+    pub fn read_commit_message(&self, path: &Path, human_marker: &str) -> Result<String> {
+        let raw =
+            std::fs::read_to_string(path).with_context(|| format!("reading commit message {}", path.display()))?;
+        // Non-editor commits preserve # markers. Do not strip a valid literal
+        // declaration as a Git comment; CI checks the final stored message too.
+        if crate::attribution::human_declared(human_marker, &raw) {
+            return Ok(raw);
+        }
+        let file = std::fs::File::open(path).with_context(|| format!("reading commit message {}", path.display()))?;
+        let out = self
+            .cmd(&["stripspace", "--strip-comments"])
+            .stdin(Stdio::from(file))
+            .output()
+            .context("cleaning commit message")?;
+        if !out.status.success() {
+            bail!("git stripspace failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        String::from_utf8(out.stdout).context("commit message is not UTF-8")
     }
 
     pub fn rev_parse(&self, rev: &str) -> Result<String> {
@@ -199,15 +218,10 @@ impl Repo {
         let list = self.git_str(&["rev-list", "--reverse", &range])?;
         let mut out = Vec::new();
         for sha in list.lines().filter(|l| !l.is_empty()) {
-            let raw = self.git(&[
-                "show",
-                "-s",
-                "--format=%P%x00%an <%ae>%x00%cn <%ce>%x00%G?%x00%GF%x00%s%x00%B",
-                sha,
-            ])?;
+            let raw = self.git(&["show", "-s", "--format=%P%x00%an <%ae>%x00%cn <%ce>%x00%s%x00%B", sha])?;
             let s = String::from_utf8_lossy(&raw).to_string();
-            let p: Vec<&str> = s.splitn(7, '\0').collect();
-            if p.len() < 7 {
+            let p: Vec<&str> = s.splitn(5, '\0').collect();
+            if p.len() < 5 {
                 bail!("unexpected git show output for {sha}");
             }
             out.push(CommitInfo {
@@ -215,10 +229,8 @@ impl Repo {
                 parents: p[0].split_whitespace().map(String::from).collect(),
                 author: p[1].to_string(),
                 committer: p[2].to_string(),
-                sig_status: p[3].trim().to_string(),
-                sig_key: p[4].trim().to_string(),
-                subject: p[5].to_string(),
-                body: p[6].to_string(),
+                subject: p[3].to_string(),
+                body: p[4].to_string(),
             });
         }
         Ok(out)

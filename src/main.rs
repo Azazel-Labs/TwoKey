@@ -1,7 +1,6 @@
 //! twokey — programmatic guardrails for AI-authored changes.
 //!
-//! Exit codes for `check`: 0 pass, 1 blocked (deny rule hit), 3 needs human
-//! approval, 2 error (bad policy, git failure, ...). Errors never pass.
+//! Exit codes for `check`: 0 pass, 1 blocked, 2 error. Errors never pass.
 
 mod attribution;
 mod config;
@@ -24,11 +23,7 @@ use report::Format;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(
-    name = "twokey",
-    version,
-    about = "Deny or require human approval for AI-authored changes to protected code"
-)]
+#[command(name = "twokey", version, about = "Prevent AI-authored changes to protected code")]
 struct Cli {
     /// Repository to operate on (any directory inside it).
     #[arg(long, global = true, default_value = ".")]
@@ -60,15 +55,6 @@ enum Cmd {
     Validate {
         #[command(flatten)]
         policy: PolicyArgs,
-    },
-    /// Print the GitHub teams (org/slug) the policy uses as approvers, one per
-    /// line, so CI can fetch their membership into a --teams-file.
-    Teams {
-        #[command(flatten)]
-        policy: PolicyArgs,
-        /// Revision to read the policy from.
-        #[arg(long, default_value = "HEAD")]
-        rev: String,
     },
     /// Write an example .twokey.toml.
     Init {
@@ -102,10 +88,9 @@ struct CheckArgs {
     /// Check all uncommitted changes, including untracked files.
     #[arg(long)]
     worktree: bool,
-    /// Logins of humans who approved this exact head (repeatable, or comma
-    /// separated in TWOKEY_APPROVERS).
-    #[arg(long = "approver", env = "TWOKEY_APPROVERS", value_delimiter = ',')]
-    approvers: Vec<String>,
+    /// Read the proposed commit message (for a commit-msg hook).
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["base", "worktree", "human", "ai"])]
+    commit_message_file: Option<PathBuf>,
     /// Source branch name (used for ai.branches); defaults to the current branch.
     #[arg(long, env = "TWOKEY_BRANCH")]
     branch: Option<String>,
@@ -115,10 +100,6 @@ struct CheckArgs {
     /// Treat the whole change as human-authored.
     #[arg(long)]
     human: bool,
-    /// JSON file mapping `org/slug` to member logins, for `team:` approvers
-    /// (CI fetches it; see `twokey teams`).
-    #[arg(long, env = "TWOKEY_TEAMS_FILE", value_name = "FILE")]
-    teams_file: Option<PathBuf>,
     /// Report-only: print and annotate findings but always exit 0 (also
     /// `settings.enforce = false` in the policy).
     #[arg(long)]
@@ -169,14 +150,6 @@ fn run(cli: Cli) -> Result<i32> {
             }
             Ok(0)
         }
-        Cmd::Teams { policy, rev } => {
-            let repo = Repo::discover(&cli.repo)?;
-            let p = config::load(&repo, &policy, Some(&rev))?;
-            for t in p.referenced_teams() {
-                println!("{t}");
-            }
-            Ok(0)
-        }
         Cmd::Init { force } => {
             let repo = Repo::discover(&cli.repo)?;
             let path = repo.root.join(config::DEFAULT_POLICY_PATH);
@@ -201,13 +174,6 @@ fn check(repo_dir: &std::path::Path, a: CheckArgs) -> Result<i32> {
         Force::None
     };
     let branch = a.branch.clone().or_else(|| repo.current_branch());
-    let approvers: Vec<String> = a
-        .approvers
-        .iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
     let (policy, changes, att) = if let Some(base) = &a.base {
         // CI: diff everything between merge-base and head.
         let head = repo.rev_parse(&a.head)?;
@@ -231,7 +197,12 @@ fn check(repo_dir: &std::path::Path, a: CheckArgs) -> Result<i32> {
             let raw = repo.diff_raw(&["--cached", base])?;
             repo.load_changes(&raw, false)?
         };
-        let att = attribution::for_local(&policy.ai, branch.as_deref(), force, false);
+        let message = a
+            .commit_message_file
+            .as_ref()
+            .map(|path| repo.read_commit_message(path, &policy.ai.cfg.human_marker))
+            .transpose()?;
+        let att = attribution::for_local(&policy.ai, branch.as_deref(), force, false, message.as_deref());
         (policy, changes, att)
     };
 
@@ -239,14 +210,7 @@ fn check(repo_dir: &std::path::Path, a: CheckArgs) -> Result<i32> {
     if a.dry_run {
         policy.settings.enforce = false;
     }
-    let mut approvals = engine::Approvals::from_logins(&approvers);
-    if let Some(f) = &a.teams_file {
-        let text = std::fs::read_to_string(f).with_context(|| format!("reading {}", f.display()))?;
-        let parsed: std::collections::BTreeMap<String, Vec<String>> = serde_json::from_str(&text)
-            .with_context(|| format!("{} must be a JSON object of \"org/slug\": [logins]", f.display()))?;
-        approvals.teams = parsed.into_iter().map(|(k, v)| (k.trim().to_lowercase(), v)).collect();
-    }
-    let eval = engine::evaluate(&policy, &changes, &att, &approvals);
+    let eval = engine::evaluate(&policy, &changes, &att);
     print!("{}", report::render(&eval, a.format));
     if let Some(p) = &a.summary_out {
         std::fs::write(p, report::markdown(&eval)).with_context(|| format!("writing {}", p.display()))?;

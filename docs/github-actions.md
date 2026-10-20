@@ -2,46 +2,58 @@
 
 [Back to README](../README.md)
 
-## GitHub setup
+The integration blocks AI-attributed changes to protected code. GitHub handles
+human reviews; approving a PR does not override a twokey denial.
 
-1. Copy `integrations/github/run.sh` to `.github/twokey/run.sh`, and
-   `twokey.yml` + `twokey-review-trigger.yml` to `.github/workflows/`. Fill in
-   the release URL and sha256 in `twokey.yml`.
-2. **Create a GitHub App** with *Commit statuses: write*, *Pull requests: read*
-   and, for team approvers, organization *Members: read*. Install it on the repo.
-3. Create an environment named `twokey`, limited to your protected branches,
-   holding variable `TWOKEY_APP_CLIENT_ID` (the App's Client ID from its settings)
-   and secret `TWOKEY_APP_KEY`.
-4. Branch ruleset on `main`: require status check **`twokey/policy`** with the
-   expected source set to **your App**; require PRs, dismiss stale approvals on
-   push, CODEOWNERS on `.github/`, `.twokey.toml` and sub-policies.
-5. Other protected bases (e.g. `release`): list them in `TWOKEY_BASES` on the
-   twokey step and require **`twokey/policy (release)`** on that branch. The
-   check only vouches for listed bases, and each base gets its own status name,
-   because commit statuses belong to a commit: otherwise a second PR with the
-   same head commit against a weaker branch could satisfy the check on `main`.
-6. Keep the third-party actions pinned to commit SHAs when updating your copies.
+## Setup
 
-When upgrading an older copy of the template, replace `TWOKEY_APP_ID` with
-`TWOKEY_APP_CLIENT_ID` in the `twokey` environment and use the App's Client ID
-from its settings. The current token action deprecates the old `app-id` input.
+1. Commit `.twokey.toml` with the paths, symbols, queries, and markers AI must
+   not change. Run `twokey init` and uncomment the rules you want in the
+   [starter policy](../examples/twokey.toml).
+2. Copy [run.sh](../integrations/github/run.sh) to `.github/twokey/run.sh` and
+   [twokey.yml](../integrations/github/twokey.yml) to `.github/workflows/twokey.yml`.
+   Set the action commit SHA, CLI version, and Linux x86_64 musl archive checksum
+   from the chosen release's `SHA256SUMS`. Use a release containing this policy
+   model; releases through v0.1.2 still contain the old approval model.
+3. Create a GitHub environment named `twokey`, limited to protected base branches.
+   The workflow uses `GITHUB_TOKEN` by default. Keep `TWOKEY_DRY_RUN` unset or
+   `false` for enforcement.
+4. Merge the configuration into the default branch and every protected PR base.
+   Open a test PR to generate the status. In **Settings → Rules → Rulesets**,
+   create an **Active** branch ruleset for `main`. Require PRs and the
+   **`twokey/policy`** status, restrict bypass permissions, and block force pushes.
+5. Protect policy and workflow files using GitHub's CODEOWNERS and review rules.
+   For other protected bases, set `TWOKEY_BASES` (for example `main,release`)
+   and require **`twokey/policy (<branch>)`** for each non-default base.
 
-How it fits together:
+Checks run when a PR opens, receives new commits (`synchronize`), reopens,
+becomes ready for review, or changes base. The trusted `pull_request_target`
+workflow reads the target branch's policy and fetches PR commits as data. It
+never checks out or executes PR code. Keep it that way when customizing it.
+The runner posts a status for the checked head and updates a summary comment.
+It does not fetch reviews, maintain reviewer groups, or resolve team membership.
 
-- `twokey.yml` runs on `pull_request_target`, so the workflow, the runner script
-  and the policy all come from the base branch. The PR is fetched as git data and
-  never checked out or executed.
-- Reviews trigger `twokey-review-trigger.yml`, a do-nothing job whose completion
-  wakes `twokey.yml` through `workflow_run` (also base-branch code). Approving a
-  PR re-runs the check automatically.
-- `run.sh` re-reads the PR from the API, collects approvals of the exact head
-  commit (only from owners, members and collaborators; never the author or
-  bots), fetches team membership, runs `twokey check`, posts the commit status
-  and keeps a single summary comment on the PR up to date. Any unexpected
-  failure turns the status into `error`, never a stuck `pending`.
-- Why the App: a status posted with the default Actions token can be imitated by
-  any workflow a PR adds, under the same name. A required check pinned to your
-  App can't, and the App key lives in an environment PR workflows can't use.
+Actions runs after GitHub receives a push. Required checks prevent merging;
+they cannot reject the initial upload of a feature branch. See the README's
+[local checks](../README.md#can-twokey-stop-a-commit-or-push) for earlier feedback.
 
-Without an App it still works (the status is posted with `github.token`); use an
-organization ruleset's *required workflows* instead to make it binding.
+## Optional dedicated status identity
+
+A dedicated GitHub App lets branch protection accept the status only from that
+App. This prevents another workflow using `GITHUB_TOKEN` from impersonating the
+status publisher. It is an authentication option, not an approval system.
+
+Create and install an App with **Commit statuses: write**. In the `twokey`
+environment, set `TWOKEY_APP_CLIENT_ID` to its Client ID and `TWOKEY_APP_KEY` to
+its private key. After a check has run, select the App as the required status's
+expected source. Keep the private key restricted to trusted workflows and
+protected environments. Without an App, GitHub's organization rulesets can
+require a trusted workflow where that feature is available.
+
+## Migrating older integrations
+
+Replace the runner and workflow together, remove `twokey-review-trigger.yml`,
+and update policies using the [migration notes](configuration.md#migrating-from-the-approval-model).
+No review-triggered rechecks or organization membership permissions are needed.
+If using the optional App, use `TWOKEY_APP_CLIENT_ID` rather than the old
+`TWOKEY_APP_ID` setting.

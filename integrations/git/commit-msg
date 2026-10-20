@@ -1,0 +1,7 @@
+#!/bin/sh
+# Install as .githooks/commit-msg and make executable on Unix.
+# git config core.hooksPath .githooks
+# Checks the proposed message for the policy's ai.human_marker before committing.
+# Local feedback only: --no-verify skips it, so CI remains the authority.
+command -v twokey >/dev/null 2>&1 || { echo "twokey is required for this hook" >&2; exit 2; }
+exec twokey check --staged --require-policy --commit-message-file "$1"

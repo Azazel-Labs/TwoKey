@@ -2,17 +2,17 @@
 # Trusted twokey runner for GitHub. Install as .github/twokey/run.sh (twokey
 # protects that path from AI changes automatically).
 #
-# Runs from the BASE branch checkout (pull_request_target / workflow_run), never
+# Runs from the BASE branch checkout (pull_request_target), never
 # from the PR. It treats the PR purely as git data: it fetches the head commit,
 # never checks it out, never runs its code.
 #
 #   run.sh <pr-number>
 #
 # Env:
-#   GH_TOKEN      github.token: reads PR, reviews, git data; writes the comment
+#   GH_TOKEN      github.token: reads PR and git data; writes the comment
 #   APP_TOKEN     optional GitHub App token: posts the commit status (so the
-#                 required check can be pinned to the App) and reads org team
-#                 membership. Without it the status is posted with GH_TOKEN.
+#                 required check can be pinned to the App). Without it the
+#                 status is posted with GH_TOKEN.
 #   TWOKEY        path to the twokey binary (default: twokey on PATH)
 #   TWOKEY_BASES  comma-separated base branches this check may vouch for
 #                 (default: the repository's default branch). See below.
@@ -33,7 +33,6 @@ gh api "repos/$repo/pulls/$pr" > "$work/pr.json"
 head_sha=$(jq -r .head.sha "$work/pr.json")
 base_ref=$(jq -r .base.ref "$work/pr.json")
 head_ref=$(jq -r .head.ref "$work/pr.json")
-author=$(jq -r .user.login "$work/pr.json")
 state=$(jq -r .state "$work/pr.json")
 [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "bad head sha" >&2; exit 2; }
 if [[ "$state" != "open" ]]; then echo "PR #$pr is $state; nothing to do"; exit 0; fi
@@ -67,42 +66,14 @@ gitf "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}"
 gitf "+refs/pull/${pr}/head:refs/twokey/pr-${pr}"
 git cat-file -e "${head_sha}^{commit}"
 
-# --- Approvals of exactly this head commit -------------------------------------
-# Latest non-comment review per user; only APPROVED on head_sha, from real users
-# with write-level association who aren't the PR author.
-approvers=$(gh api --paginate "repos/$repo/pulls/$pr/reviews" \
-  | jq -s -r --arg sha "$head_sha" --arg author "$author" '
-      add // []
-      | map(select(.state != "COMMENTED" and .user != null))
-      | group_by(.user.login)
-      | map(max_by(.submitted_at))
-      | map(select(.state == "APPROVED" and .commit_id == $sha
-                   and .user.type == "User" and .user.login != $author
-                   and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))))
-      | map(.user.login) | join(",")')
-echo "approvals on ${head_sha:0:10}: ${approvers:-none}"
-
-# --- Team membership for team: approvers (App token with org Members: read) ----
-echo '{}' > "$work/teams.json"
-for team in $("$twokey" teams --rev "origin/${base_ref}"); do
-  org="${team%%/*}"; slug="${team#*/}"
-  if members=$(GH_TOKEN="${APP_TOKEN:-$GH_TOKEN}" gh api --paginate "orgs/$org/teams/$slug/members" --jq '.[].login' 2>/dev/null); then
-    jq --arg t "$team" --arg m "$members" '. + {($t): ($m | split("\n") | map(select(length > 0)))}' \
-      "$work/teams.json" > "$work/t.json" && mv "$work/t.json" "$work/teams.json"
-  else
-    echo "::warning::could not read members of $team (APP_TOKEN needs org Members: read)"
-  fi
-done
-
 # --- Evaluate ------------------------------------------------------------------
 dry=()
 [[ "${DRY_RUN:-}" == "true" ]] && dry=(--dry-run)
 trap - ERR
 set +e
-TWOKEY_APPROVERS="$approvers" "$twokey" check \
+"$twokey" check \
   --base "origin/${base_ref}" --head "$head_sha" \
   --branch "$head_ref" \
-  --teams-file "$work/teams.json" \
   --require-policy \
   --format github \
   --summary-out "$work/summary.md" \
@@ -112,9 +83,8 @@ set -e
 trap 'status error "twokey runner failed; see the run log" || true' ERR
 
 case $code in
-  0) status success "No protected areas need sign-off" ;;
+  0) status success "No prohibited changes found" ;;
   1) status failure "Blocked: AI change to areas agents may not modify" ;;
-  3) status failure "Needs approval from a listed reviewer" ;;
   *) status error "twokey error (exit $code); see the run log" ;;
 esac
 

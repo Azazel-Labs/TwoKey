@@ -1,197 +1,211 @@
-# twokey policy. Lives at the repo root as .twokey.toml.
+## Uncomment the rule blocks you want and adapt their paths. All example rules
+## and optional limits start disabled. Built-in self-protection, markers, and
+## default symlink/submodule/mode-change protections remain enabled.
 #
-# In CI this file is read from the BASE of the pull request, never from the PR
-# itself, so a change can't relax its own rules. Edits to this file (and to all
-# other twokey config, see [settings]) are always denied for AI and need approval
-# for humans (built-in rules `twokey-policy` and `twokey-wiring`).
+## twokey policy. Lives at the repo root as .twokey.toml.
 #
-# Actions, mildest to strictest:  allow · warn · approve · deny
-#   approve = a listed human must approve the exact head commit
+## In CI this file is read from the BASE of the pull request, never from the PR
+## itself, so a change can't relax its own rules. Edits to this file (and to all
+## other twokey config, see [settings]) are always denied for AI
+## (built-in rules `twokey-policy` and `twokey-wiring`).
+#
+## Actions, mildest to strictest:  allow · warn · deny
 #   deny    = AI-authored changes may never touch this; a human has to do it
-# `action` applies to AI-attributed changes, `human_action` (default allow) to the rest.
+## `action` applies to AI-attributed changes, `human_action` (default allow) to the rest.
 version = 1
 
 [settings]
 enforce = true                        # false = report-only while you tune the policy
 case_insensitive_paths = true
 default_base = "origin/main"          # used by the agent hook when it sees `git push`
-# Always protected without listing them (built in, can't be turned off): every
-# .twokey.toml, .twokey/**, .github/twokey/**, and any CI/hook/agent config
-# (.github/workflows, .claude, .githooks, .husky, pre-commit, lefthook, GitLab,
-# CircleCI, Buildkite, Jenkins, Azure, Bitbucket) that mentions twokey.
-protect = [".githooks/**"]            # extra paths that get the same treatment
-# Monorepos: per-directory policies that can only ADD rules, scoped to their dir.
+## Always protected without listing them (built in, can't be turned off): every
+## .twokey.toml, .twokey/**, .github/twokey/**, and any CI/hook/agent config
+## (.github/workflows, .claude, .githooks, .husky, pre-commit, lefthook, GitLab,
+## CircleCI, Buildkite, Jenkins, Azure, Bitbucket) that mentions twokey.
+# protect = [".githooks/**"]            # extra paths that get the same treatment
+## Monorepos: per-directory policies that can only ADD rules, scoped to their dir.
 # include = ["services/*/.twokey.toml"]
 
 [ai]
-# Signals that a commit is AI-authored. Defaults cover Claude, Copilot, Codex,
-# Cursor, Devin, Gemini, Aider etc. via Co-authored-by / Assisted-by trailers,
-# bot identities and agent branch prefixes. Uncomment to be strict:
-# assume_ai = true                    # every change is AI unless --human is passed
-# require_signed_human = true         # human = good signature from a trusted key
-# human_signing_keys = ["SHA256:..."]
-branches = ['^(claude|codex|copilot|cursor|devin|ai|agent|bot)[/-]']
+## Untagged changes are AI by default, including local models with no AI metadata.
+assume_ai = true
+## Required and non-empty when assume_ai = false; omission is a policy error.
+## Matched against each trimmed line of the commit message (case-insensitive).
+trailers = [
+  '(?i)^co-authored-by:.*\b(claude|anthropic|copilot|codex|openai|cursor|devin|gemini|aider|windsurf|jules|amazon q|codeium)\b',
+  '(?i)^(ai-)?(assisted|generated)-by:',
+]
 
-[approvals]
-approvers = ["group:maintainers"]     # default for rules that don't list their own
-# Approvers can be logins ("alice"), groups ("group:security") or GitHub teams
-# ("team:acme/security" or "@acme/security"; CI fetches membership).
+## Choose the literal marker for fully human commits (not a regex).
+human_marker = "#Human"  # alternatively: "#Human"
+## Put your marker on its own line after a blank line at the end of the message.
+## Explicit AI signals still win over that declaration.
+## With assume_ai = false, only these signals identify AI; unmatched changes
+## are treated as human without needing human_marker. Untagged local AI may pass.
+## The authors, branches, and env defaults below apply even while commented out.
+## Uncomment those lists to replace their defaults; [] disables that signal.
+## Message/identity/branch patterns are regexes; TOML single quotes preserve \.
+## Explicit AI signals also apply when assume_ai = true and override human_marker.
 
-[approvals.groups]
-maintainers = ["alice", "bob"]
-security = ["carol", "dave"]
-data = ["erin"]
+## Matched against both author and committer as "Name <email>".
+# authors = [
+#   '(?i)noreply@anthropic\.com',
+#   '(?i)\[bot\]',
+#   '(?i)\b(copilot|codex|devin|cursor)\b.*@',
+# ]
+
+## A matching source branch marks the entire checked range as AI.
+# branches = ['^(claude|codex|copilot|cursor|devin|ai|agent|bot)[/-]']
+
+## Local checks only: any non-empty value counts, including "0" or "false".
+## These are literal environment variable names, not regexes.
+# env = ["CLAUDECODE", "TWOKEY_AI"]
+## Agent hooks always treat edits as AI, regardless of assume_ai or these lists.
 
 [markers]
-# In-file markers, read from the base version:
+## In-file markers, read from the base version:
 #   // twokey:lock-begin <reason>   ...   // twokey:lock-end     -> deny
-#   # twokey:review-begin <reason>  ...   # twokey:review-end    -> approve
-#   /* twokey:lock-file */ or # twokey:review-file              -> whole file
+#   /* twokey:lock-file */                                    -> whole file
 enabled = true
 lock_action = "deny"
-review_action = "approve"
-approvers = ["group:security"]
 
-[limits]
-max_files = 60
-max_changed_lines = 3000
-max_deleted_files = 10
-action = "approve"
-symlinks = "approve"
-submodules = "deny"
-mode_changes = "approve"
-binary = "warn"
+# [limits]
+# max_files = 60
+# max_changed_lines = 3000
+# max_deleted_files = 10
+# action = "deny"
+# symlinks = "deny"
+# submodules = "deny"
+# mode_changes = "deny"
+# binary = "warn"
 
-# ------------------------------------------------------------ never by AI
+## ------------------------------------------------------------ never by AI
 
-[[rule]]
-id = "ci-and-review-routing"
-kind = "path"
-paths = [
-  "/.github/workflows/**", "/.github/actions/**", "/.github/CODEOWNERS", "/CODEOWNERS",
-  "/.gitlab-ci.yml", "/.circleci/**", "/Jenkinsfile", "/.buildkite/**",
-]
-action = "deny"
-human_action = "approve"
-approvers = ["group:security"]
-reason = "CI and review routing are part of the enforcement layer; agents may not change them."
+# [[rule]]
+# id = "ci-and-review-routing"
+# kind = "path"
+# paths = [
+#   "/.github/workflows/**", "/.github/actions/**", "/.github/CODEOWNERS", "/CODEOWNERS",
+#   "/.gitlab-ci.yml", "/.circleci/**", "/Jenkinsfile", "/.buildkite/**",
+# ]
+# action = "deny"
+# human_action = "allow"
+# reason = "CI and review routing are part of the enforcement layer; agents may not change them."
 
-[[rule]]
-id = "agent-and-hook-config"
-kind = "path"
-paths = ["/.claude/**", "/.pre-commit-config.yaml", "/.husky/**", "/lefthook.yml"]
-action = "deny"
-reason = "Agent permissions and git hooks are guardrails; an agent may not loosen its own leash."
+# [[rule]]
+# id = "agent-and-hook-config"
+# kind = "path"
+# paths = ["/.claude/**", "/.pre-commit-config.yaml", "/.husky/**", "/lefthook.yml"]
+# action = "deny"
+# reason = "Agent permissions and git hooks are guardrails; an agent may not loosen its own leash."
 
-[[rule]]
-id = "secrets-and-keys"
-kind = "path"
-paths = ["*.pem", "*.key", "*.p12", "id_rsa*", ".env", ".env.*", "**/secrets/**"]
-exclude = [".env.example"]
-action = "deny"
-reason = "Credentials and key material."
+# [[rule]]
+# id = "secrets-and-keys"
+# kind = "path"
+# paths = ["*.pem", "*.key", "*.p12", "id_rsa*", ".env", ".env.*", "**/secrets/**"]
+# exclude = [".env.example"]
+# action = "deny"
+# reason = "Credentials and key material."
 
-[[rule]]
-id = "migrations-append-only"
-kind = "path"
-paths = ["/migrations/**", "/db/migrate/**"]
-on = ["modified", "deleted"]
-action = "deny"
-reason = "Existing migrations have already run in production; add a new migration instead."
+# [[rule]]
+# id = "migrations-append-only"
+# kind = "path"
+# paths = ["/migrations/**", "/db/migrate/**"]
+# on = ["modified", "deleted"]
+# action = "deny"
+# reason = "Existing migrations have already run in production; add a new migration instead."
 
-# A path rule, not `symbols = ["*"]`: imports, macros and module attributes
-# aren't symbols, and swapping `use rand::rngs::OsRng as Rng` matters.
-[[rule]]
-id = "crypto-core"
-kind = "path"
-paths = ["/src/crypto/**"]
-action = "deny"
-reason = "Cryptographic code is human-only."
+## A path rule, not `symbols = ["*"]`: imports, macros and module attributes
+## aren't symbols, and swapping `use rand::rngs::OsRng as Rng` matters.
+# [[rule]]
+# id = "crypto-core"
+# kind = "path"
+# paths = ["/src/crypto/**"]
+# action = "deny"
+# reason = "Cryptographic code is human-only."
 
-# ------------------------------------------------------------ human approval
+## ------------------------------------------------------------ protected code
 
-[[rule]]
-id = "auth-logic"
-kind = "symbol"
-paths = ["/src/auth/**", "/app/auth/**", "/internal/auth/**"]
-symbols = ["verify_*", "authorize*", "check_permission*", "Session::*", "Session.*", "*Middleware*"]
-action = "approve"
-approvers = ["group:security"]
-reason = "Authentication/authorization logic."
+# [[rule]]
+# id = "auth-logic"
+# kind = "symbol"
+# paths = ["/src/auth/**", "/app/auth/**", "/internal/auth/**"]
+# symbols = ["verify_*", "authorize*", "check_permission*", "Session::*", "Session.*", "*Middleware*"]
+# action = "deny"
+# reason = "Authentication/authorization logic."
 
-[[rule]]
-id = "existing-tests"
-kind = "symbol"
-paths = ["**/tests/**", "**/test_*.py", "**/*_test.py", "**/*_test.go", "**/*.rs"]
-symbols = ["tests::*", "test_*", "Test*"]
-on = ["modified", "deleted"]
-action = "approve"
-reason = "Changing or deleting an existing test needs a human to confirm the behavior change is intended (adding tests is fine)."
+# [[rule]]
+# id = "existing-tests"
+# kind = "symbol"
+# paths = ["**/tests/**", "**/test_*.py", "**/*_test.py", "**/*_test.go", "**/*.rs"]
+# symbols = ["tests::*", "test_*", "Test*"]
+# on = ["modified", "deleted"]
+# action = "deny"
+# reason = "AI may add tests but may not change or delete existing tests."
 
-[[rule]]
-id = "new-unsafe-rust"
-kind = "query"
-language = "rust"
-query = "(unsafe_block) @protect"
-on = ["added", "modified"]
-action = "approve"
-approvers = ["group:security"]
-reason = "New or changed unsafe code."
+# [[rule]]
+# id = "new-unsafe-rust"
+# kind = "query"
+# language = "rust"
+# query = "(unsafe_block) @protect"
+# on = ["added", "modified"]
+# action = "deny"
+# reason = "New or changed unsafe code."
 
-[[rule]]
-id = "dependencies"
-kind = "path"
-paths = [
-  "Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
-  "go.mod", "go.sum", "requirements*.txt", "pyproject.toml", "poetry.lock", "uv.lock", "Gemfile.lock",
-]
-action = "approve"
-reason = "New or upgraded dependencies are a supply-chain decision."
+# [[rule]]
+# id = "dependencies"
+# kind = "path"
+# paths = [
+#   "Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
+#   "go.mod", "go.sum", "requirements*.txt", "pyproject.toml", "poetry.lock", "uv.lock", "Gemfile.lock",
+# ]
+# action = "deny"
+# reason = "AI may not change dependency declarations or lockfiles."
 
-[[rule]]
-id = "infra"
-kind = "path"
-paths = ["*.tf", "*.tfvars", "/k8s/**", "/helm/**", "Dockerfile", "/deploy/**"]
-action = "approve"
-reason = "Infrastructure and deployment."
+# [[rule]]
+# id = "infra"
+# kind = "path"
+# paths = ["*.tf", "*.tfvars", "/k8s/**", "/helm/**", "Dockerfile", "/deploy/**"]
+# action = "deny"
+# reason = "Infrastructure and deployment."
 
-[[rule]]
-id = "lint-and-type-suppressions"
-kind = "content"
-pattern = '(#!?\[\s*allow\s*\(|eslint-disable|@ts-ignore|@ts-nocheck|@ts-expect-error|# type: ignore|# noqa|//\s*nolint|#\s*pragma: no cover)'
-action = "approve"
-reason = "Silencing a linter or type checker instead of fixing the code."
+# [[rule]]
+# id = "lint-and-type-suppressions"
+# kind = "content"
+# pattern = '(#!?\[\s*allow\s*\(|eslint-disable|@ts-ignore|@ts-nocheck|@ts-expect-error|# type: ignore|# noqa|//\s*nolint|#\s*pragma: no cover)'
+# action = "deny"
+# reason = "Silencing a linter or type checker instead of fixing the code."
 
-# ------------------------------------------------------------ never by AI (content)
+## ------------------------------------------------------------ never by AI (content)
 
-[[rule]]
-id = "no-test-skips"
-kind = "content"
-paths = ["*.py", "*.rs", "*.ts", "*.tsx", "*.js", "*.jsx", "*.go"]
-pattern = '(@pytest\.mark\.(skip|xfail)|pytest\.skip\(|#\[\s*ignore\b|\b(it|test|describe)\.(skip|only)\(|\bx(it|describe)\(|\bt\.Skip(Now)?\()'
-action = "deny"
-reason = "Skipping tests to get a green build."
+# [[rule]]
+# id = "no-test-skips"
+# kind = "content"
+# paths = ["*.py", "*.rs", "*.ts", "*.tsx", "*.js", "*.jsx", "*.go"]
+# pattern = '(@pytest\.mark\.(skip|xfail)|pytest\.skip\(|#\[\s*ignore\b|\b(it|test|describe)\.(skip|only)\(|\bx(it|describe)\(|\bt\.Skip(Now)?\()'
+# action = "deny"
+# reason = "Skipping tests to get a green build."
 
-[[rule]]
-id = "removed-assertions"
-kind = "content"
-paths = ["**/tests/**", "**/test_*.py", "**/*_test.go", "**/*.test.ts", "**/*.spec.ts"]
-pattern = '\b(assert\w*|expect)\b'
-lines = "removed"
-action = "approve"
-reason = "Assertions were removed from tests."
+# [[rule]]
+# id = "removed-assertions"
+# kind = "content"
+# paths = ["**/tests/**", "**/test_*.py", "**/*_test.go", "**/*.test.ts", "**/*.spec.ts"]
+# pattern = '\b(assert\w*|expect)\b'
+# lines = "removed"
+# action = "deny"
+# reason = "AI may not remove assertions from tests."
 
-# ------------------------------------------------------------ writing conventions
+## ------------------------------------------------------------ writing conventions
 
-[[rule]]
-id = "no-em-dashes"
-kind = "content"
-# TOML literal strings preserve the regex's Unicode escape.
-pattern = '\x{2014}'
-lines = "added"
-action = "deny"
-# Apply the writing convention to human changes too.
-human_action = "deny"
-reason = "Use a comma, colon, parentheses, or a separate sentence instead of an em dash."
-# Omit paths to check all text files, or limit this rule to prose:
-# paths = ["*.md", "*.txt", "*.rst"]
+# [[rule]]
+# id = "no-em-dashes"
+# kind = "content"
+## TOML literal strings preserve the regex's Unicode escape.
+# pattern = '\x{2014}'
+# lines = "added"
+# action = "deny"
+## Apply the writing convention to human changes too.
+# human_action = "deny"
+# reason = "Use a comma, colon, parentheses, or a separate sentence instead of an em dash."
+## Omit paths to check all text files, or limit this rule to prose:
+## paths = ["*.md", "*.txt", "*.rst"]

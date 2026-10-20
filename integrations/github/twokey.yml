@@ -1,17 +1,15 @@
 # .github/workflows/twokey.yml
 #
-# Runs twokey on every PR and re-runs it when someone reviews. All code here
-# comes from the BASE branch (pull_request_target / workflow_run), so a PR can't
+# Runs twokey when a PR opens or its commits change. All code here
+# comes from the BASE branch (pull_request_target), so a PR can't
 # change how it's checked. The PR is only ever read as git data.
 #
 # Setup (see README "GitHub setup"):
 #  1. Copy integrations/github/run.sh to .github/twokey/run.sh.
-#  2. Copy twokey-review-trigger.yml next to this file.
-#  3. Recommended: create a GitHub App (Commit statuses: write; Pull requests:
-#     read; org Members: read for team approvers), store its Client ID in the
+#  2. Optional: create a GitHub App (Commit statuses: write), store its Client ID in the
 #     TWOKEY_APP_CLIENT_ID variable and key in the TWOKEY_APP_KEY secret of an
 #     environment named "twokey" limited to your protected branches.
-#  4. Branch ruleset: require status check "twokey/policy" (or
+#  3. Branch ruleset: require status check "twokey/policy" (or
 #     "twokey/policy (<branch>)" for other bases listed in TWOKEY_BASES), with
 #     the expected source set to your App. Without an App, a workflow added by a
 #     PR could post a fake status under the same name, so the App is what makes
@@ -26,9 +24,6 @@ on:
   pull_request_target:
     # `edited` re-runs the check when the PR is retargeted to another base.
     types: [opened, synchronize, reopened, ready_for_review, edited]
-  workflow_run:
-    workflows: [twokey-review-trigger]
-    types: [completed]
 
 permissions:
   contents: read
@@ -40,9 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: twokey
     concurrency:
-      # Keyed by head commit so a review-triggered run and a push-triggered run
-      # for the same commit can't race each other into a stale status.
-      group: twokey-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
+      # Serialize checks for the same head commit.
+      group: twokey-${{ github.event.pull_request.head.sha }}
       cancel-in-progress: true
     steps:
       - name: Check out trusted base (scripts and policy come from here)
@@ -60,45 +54,20 @@ jobs:
           private-key: ${{ secrets.TWOKEY_APP_KEY }}
           owner: ${{ github.repository_owner }}
 
-      - name: Which PR(s)?
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
-          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          RUN_PRS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
-        run: |
-          if [ "$EVENT" = "pull_request_target" ]; then
-            nums="$PR_FROM_EVENT"
-          else
-            # Every open PR with this head commit is re-checked; run.sh re-reads
-            # everything else from the API and skips bases it may not vouch for.
-            nums=$( (echo "$RUN_PRS" | jq -r '.[].number';
-                     gh api "repos/$GITHUB_REPOSITORY/commits/$RUN_HEAD_SHA/pulls" --jq '.[].number') | sort -un)
-          fi
-          nums=$(echo $nums | tr ' ' '\n' | { grep -E '^[0-9]+$' || true; } | tr '\n' ' ')
-          [ -n "$nums" ] || { echo "no PR found"; exit 0; }
-          echo "numbers=$nums" >> "$GITHUB_OUTPUT"
-
       - name: Install twokey (pinned release, checksum verified)
-        if: steps.pr.outputs.numbers != ''
         # Pin the action to a commit SHA, and the archive to its sha256 (from the
         # release's SHA256SUMS), so a replaced release can't run here.
         uses: Azazel-Labs/twokey@COMMIT_SHA
         with:
-          version: v0.1.0
-          sha256: "<sha256 of twokey-v0.1.0-x86_64-unknown-linux-musl.tar.gz>"
+          version: "<release-tag>"
+          sha256: "<sha256 of the release x86_64-unknown-linux-musl archive>"
 
       - name: twokey
-        if: steps.pr.outputs.numbers != ''
         env:
           GH_TOKEN: ${{ github.token }}
           APP_TOKEN: ${{ steps.app.outputs.token }}
           DRY_RUN: ${{ vars.TWOKEY_DRY_RUN }} # set to "true" while tuning the policy
-          NUMBERS: ${{ steps.pr.outputs.numbers }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           # TWOKEY_BASES: main,release  # bases this check may vouch for (default: default branch)
         run: |
-          rc=0
-          for n in $NUMBERS; do .github/twokey/run.sh "$n" || rc=1; done
-          exit $rc
+          bash .github/twokey/run.sh "$PR_NUMBER"

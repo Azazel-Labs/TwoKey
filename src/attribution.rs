@@ -1,9 +1,8 @@
 //! Deciding which changes count as AI-authored.
 //!
-//! Heuristic signals (trailers, identities, branch names, env vars) are only as
-//! honest as the agent. For a fail-closed setup use `require_signed_human = true`
-//! (a commit is human only if it carries a good signature from a trusted key) or
-//! `assume_ai = true`.
+//! Untagged changes are AI by default. The configured human marker declares
+//! fully human work; explicit AI signals take precedence. Declarations are not
+//! proof of authorship.
 
 use crate::config::CompiledAi;
 use crate::git::{CommitInfo, Repo};
@@ -44,6 +43,36 @@ impl Attribution {
     }
 }
 
+/// Require an unambiguous declaration in the final trailer paragraph, after
+/// the subject/body. Prose mentions and conflicting/duplicate values do not count.
+pub fn human_declared(marker: &str, message: &str) -> bool {
+    let normalized = message.replace("\r\n", "\n");
+    let Some((_, footer)) = normalized.trim_end().rsplit_once("\n\n") else {
+        return false;
+    };
+    let mut matches = 0;
+    for line in footer.lines() {
+        if line.trim().eq_ignore_ascii_case(marker) {
+            matches += 1;
+            continue;
+        }
+        let Some((key, _)) = line.split_once(':') else {
+            return false;
+        };
+        if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            return false;
+        }
+        // Reject a conflicting value for the configured trailer key.
+        if marker
+            .split_once(':')
+            .is_some_and(|(expected, _)| key.eq_ignore_ascii_case(expected))
+        {
+            return false;
+        }
+    }
+    matches == 1
+}
+
 pub fn classify_commit(ai: &CompiledAi, c: &CommitInfo) -> (bool, Vec<String>) {
     let mut why = Vec::new();
     for line in c.body.lines() {
@@ -57,20 +86,8 @@ pub fn classify_commit(ai: &CompiledAi, c: &CommitInfo) -> (bool, Vec<String>) {
             why.push(format!("{role} `{ident}`"));
         }
     }
-    if ai.cfg.require_signed_human {
-        let good = c.sig_status == "G";
-        let key_ok = ai.cfg.human_signing_keys.is_empty()
-            || ai
-                .cfg
-                .human_signing_keys
-                .iter()
-                .any(|k| k.eq_ignore_ascii_case(&c.sig_key));
-        if !(good && key_ok) {
-            why.push(format!(
-                "not signed by a trusted human key (signature status `{}`)",
-                c.sig_status
-            ));
-        }
+    if ai.cfg.assume_ai && !human_declared(&ai.cfg.human_marker, &c.body) {
+        why.push(format!("no `{}` declaration (ai.assume_ai)", ai.cfg.human_marker));
     }
     (!why.is_empty(), why)
 }
@@ -116,10 +133,6 @@ pub fn for_range(
     let commits = repo.commits(base, head)?;
     let mut att = Attribution::whole(false, "commit analysis");
     att.reasons.clear();
-    if ai.cfg.assume_ai {
-        att.all_ai = true;
-        att.reasons.push("policy sets ai.assume_ai".into());
-    }
     if let Some(r) = branch_is_ai(ai, branch) {
         att.all_ai = true;
         att.reasons.push(r);
@@ -157,7 +170,13 @@ pub fn for_range(
 
 /// Attribution for local checks (staged / worktree / agent hook): there are no
 /// commits yet, so the whole change is AI or not.
-pub fn for_local(ai: &CompiledAi, branch: Option<&str>, force: Force, in_agent: bool) -> Attribution {
+pub fn for_local(
+    ai: &CompiledAi,
+    branch: Option<&str>,
+    force: Force,
+    in_agent: bool,
+    message: Option<&str>,
+) -> Attribution {
     match force {
         Force::Ai => return Attribution::whole(true, "--ai flag"),
         Force::Human => return Attribution::whole(false, "--human flag"),
@@ -166,14 +185,24 @@ pub fn for_local(ai: &CompiledAi, branch: Option<&str>, force: Force, in_agent: 
     if in_agent {
         return Attribution::whole(true, "running as an agent hook");
     }
-    if ai.cfg.assume_ai {
-        return Attribution::whole(true, "policy sets ai.assume_ai");
-    }
     if let Some(r) = env_is_ai(ai) {
         return Attribution::whole(true, r);
     }
     if let Some(r) = branch_is_ai(ai, branch) {
         return Attribution::whole(true, r);
+    }
+    if let Some(message) = message {
+        for line in message.lines() {
+            if ai.trailers.iter().any(|re| re.is_match(line.trim())) {
+                return Attribution::whole(true, format!("trailer `{}`", line.trim()));
+            }
+        }
+    }
+    if message.is_some_and(|m| human_declared(&ai.cfg.human_marker, m)) {
+        return Attribution::whole(false, format!("`{}` declaration", ai.cfg.human_marker));
+    }
+    if ai.cfg.assume_ai {
+        return Attribution::whole(true, format!("no `{}` declaration (ai.assume_ai)", ai.cfg.human_marker));
     }
     Attribution::whole(false, "no AI signals (env, branch) found")
 }
@@ -183,14 +212,12 @@ mod tests {
     use super::*;
     use crate::config::Policy;
 
-    fn commit(author: &str, body: &str, sig: &str) -> CommitInfo {
+    fn commit(author: &str, body: &str) -> CommitInfo {
         CommitInfo {
             sha: "a".repeat(40),
             parents: vec!["b".repeat(40)],
             author: author.into(),
             committer: author.into(),
-            sig_status: sig.into(),
-            sig_key: String::new(),
             subject: body.lines().next().unwrap_or("").into(),
             body: body.into(),
         }
@@ -204,23 +231,19 @@ mod tests {
                 &p.ai,
                 &commit(
                     "Dev <dev@x.io>",
-                    "fix\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
-                    "N"
+                    "fix\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
                 )
             )
             .0
         );
-        assert!(
-            classify_commit(
-                &p.ai,
-                &commit("dependabot[bot] <x@users.noreply.github.com>", "bump", "N")
-            )
-            .0
-        );
+        assert!(classify_commit(&p.ai, &commit("dependabot[bot] <x@users.noreply.github.com>", "bump")).0);
         assert!(
             !classify_commit(
                 &p.ai,
-                &commit("Dev <dev@x.io>", "fix\n\nCo-authored-by: Pat <pat@x.io>", "N")
+                &commit(
+                    "Dev <dev@x.io>",
+                    "fix\n\nCo-authored-by: Pat <pat@x.io>\nHuman-Authored: true"
+                )
             )
             .0
         );
@@ -229,9 +252,75 @@ mod tests {
     }
 
     #[test]
-    fn fail_closed_signatures() {
-        let p = Policy::compile("[ai]\nrequire_signed_human = true\n", ".twokey.toml", "t".into()).unwrap();
-        assert!(classify_commit(&p.ai, &commit("Dev <dev@x.io>", "fix", "N")).0);
-        assert!(!classify_commit(&p.ai, &commit("Dev <dev@x.io>", "fix", "G")).0);
+    fn human_declaration_requires_a_trailer() {
+        for message in [
+            "fix\n\nHuman-Authored: true",
+            "fix\r\n\r\nhuman-authored: TRUE\r\n",
+            "fix\n\nIssue: 123\nHuman-Authored: true\n",
+        ] {
+            assert!(human_declared("Human-Authored: true", message), "{message}");
+        }
+        for message in [
+            "fix",
+            "Human-Authored: true",
+            "fix\nHuman-Authored: true",
+            "fix\n\nHuman-Authored: false",
+            "fix\n\nHuman-Authored: true\nprose",
+            "fix\n\nHuman-Authored: true\n\nmore text",
+            "fix\n\nHuman-Authored: true\nHuman-Authored: false",
+            "fix\n\nHuman-Authored: true\nHuman-Authored: true",
+        ] {
+            assert!(!human_declared("Human-Authored: true", message), "{message}");
+        }
+    }
+
+    #[test]
+    fn default_ai_and_explicit_human_with_conflicting_signals() {
+        let p = Policy::compile("", ".twokey.toml", "t".into()).unwrap();
+        assert!(classify_commit(&p.ai, &commit("Dev <dev@x.io>", "fix")).0);
+        let human = "fix\n\nHuman-Authored: true";
+        assert!(!classify_commit(&p.ai, &commit("Dev <dev@x.io>", human)).0);
+        assert!(classify_commit(&p.ai, &commit("bot[bot] <bot@x.io>", human)).0);
+        assert!(
+            classify_commit(
+                &p.ai,
+                &commit(
+                    "Dev <dev@x.io>",
+                    "fix\n\nGenerated-by: local-model\nHuman-Authored: true"
+                )
+            )
+            .0
+        );
+        // Agent hooks never accept a commit-message declaration as permission.
+        assert!(for_local(&p.ai, None, Force::None, true, Some(human)).all_ai);
+        assert!(for_local(&p.ai, Some("ai/work"), Force::None, false, Some(human)).all_ai);
+        let legacy = Policy::compile(
+            "[ai]\nassume_ai=false\ntrailers=['^Generated-by:']",
+            ".twokey.toml",
+            "t".into(),
+        )
+        .unwrap();
+        assert!(!classify_commit(&legacy.ai, &commit("Dev <dev@x.io>", "fix")).0);
+    }
+
+    #[test]
+    fn custom_human_marker_replaces_default() {
+        let p = Policy::compile("[ai]\nhuman_marker = '#Human'", ".twokey.toml", "t".into()).unwrap();
+        for body in ["fix\n\n#Human", "fix\n\n#human\nIssue: 123"] {
+            assert!(!classify_commit(&p.ai, &commit("Dev <dev@x.io>", body)).0);
+        }
+        for body in [
+            "fix #Human",
+            "fix\n\n#Human-ish",
+            "fix\n\n#Human\n#Human",
+            "fix\n\nHuman-Authored: true",
+            "fix\n\nGenerated-by: model\n#Human",
+        ] {
+            assert!(classify_commit(&p.ai, &commit("Dev <dev@x.io>", body)).0);
+        }
+        for marker in ["", " ", " #Human", "#Human\nother"] {
+            let toml = format!("[ai]\nhuman_marker = {marker:?}");
+            assert!(Policy::compile(&toml, ".twokey.toml", "t".into()).is_err());
+        }
     }
 }

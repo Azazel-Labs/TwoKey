@@ -10,21 +10,17 @@ use anyhow::{Context, Result, anyhow, bail};
 use globset::GlobSet;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tree_sitter::Query;
 
 pub const DEFAULT_POLICY_PATH: &str = ".twokey.toml";
-/// Placeholder approver that no login can match.
-pub const NOBODY: &str = "<no valid approver configured>";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
     #[default]
     Allow,
     Warn,
-    Approve,
     Deny,
 }
 
@@ -64,8 +60,6 @@ pub struct PolicyFile {
     pub settings: SettingsCfg,
     #[serde(default)]
     pub ai: AiCfg,
-    #[serde(default)]
-    pub approvals: ApprovalsCfg,
     #[serde(default)]
     pub markers: MarkersCfg,
     #[serde(default)]
@@ -224,30 +218,33 @@ fn expand_includes(raw: &mut PolicyFile, policy_path: &str, src: &dyn IncludeSou
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields, default)]
 pub struct AiCfg {
-    /// Treat every change as AI-authored (strictest; good for agent-only repos).
+    /// Treat changes as AI unless explicitly declared human.
     pub assume_ai: bool,
+    /// Literal standalone declaration in the final commit-message paragraph.
+    pub human_marker: String,
     /// Regexes matched against each line of each commit message.
-    pub trailers: Vec<String>,
+    pub trailers: Option<Vec<String>>,
     /// Regexes matched against `Name <email>` of author and committer.
     pub authors: Vec<String>,
     /// Regexes matched against the source branch name.
     pub branches: Vec<String>,
     /// If any of these env vars is set (non-empty), local checks are AI.
     pub env: Vec<String>,
-    /// Fail closed: a commit is human only if it carries a good signature.
-    pub require_signed_human: bool,
-    /// If non-empty, the signing key fingerprint must be one of these.
-    pub human_signing_keys: Vec<String>,
+}
+
+fn default_ai_trailers() -> Vec<String> {
+    vec![
+                r"(?i)^co-authored-by:.*\b(claude|anthropic|copilot|codex|openai|cursor|devin|gemini|aider|windsurf|jules|amazon q|codeium)\b".into(),
+                r"(?i)^(ai-)?(assisted|generated)-by:".into(),
+            ]
 }
 
 impl Default for AiCfg {
     fn default() -> Self {
         AiCfg {
-            assume_ai: false,
-            trailers: vec![
-                r"(?i)^co-authored-by:.*\b(claude|anthropic|copilot|codex|openai|cursor|devin|gemini|aider|windsurf|jules|amazon q|codeium)\b".into(),
-                r"(?i)^(ai-)?(assisted|generated)-by:".into(),
-            ],
+            assume_ai: true,
+            human_marker: "Human-Authored: true".into(),
+            trailers: None,
             authors: vec![
                 r"(?i)noreply@anthropic\.com".into(),
                 r"(?i)\[bot\]".into(),
@@ -255,19 +252,8 @@ impl Default for AiCfg {
             ],
             branches: vec![r"^(claude|codex|copilot|cursor|devin|ai|agent|bot)[/-]".into()],
             env: vec!["CLAUDECODE".into(), "TWOKEY_AI".into()],
-            require_signed_human: false,
-            human_signing_keys: Vec::new(),
         }
     }
-}
-
-#[derive(Debug, Deserialize, Clone, Default, Serialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct ApprovalsCfg {
-    /// Default approvers for rules that don't list their own. Empty = any
-    /// approving human counts.
-    pub approvers: Vec<String>,
-    pub groups: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -275,9 +261,7 @@ pub struct ApprovalsCfg {
 pub struct MarkersCfg {
     pub enabled: bool,
     pub lock_action: Action,
-    pub review_action: Action,
     pub human_action: Action,
-    pub approvers: Vec<String>,
 }
 
 impl Default for MarkersCfg {
@@ -285,9 +269,7 @@ impl Default for MarkersCfg {
         MarkersCfg {
             enabled: true,
             lock_action: Action::Deny,
-            review_action: Action::Approve,
             human_action: Action::Allow,
-            approvers: Vec::new(),
         }
     }
 }
@@ -306,7 +288,6 @@ pub struct LimitsCfg {
     pub binary: Action,
     /// Action for any limit finding on human-authored changes.
     pub human_action: Action,
-    pub approvers: Vec<String>,
 }
 
 impl Default for LimitsCfg {
@@ -315,13 +296,12 @@ impl Default for LimitsCfg {
             max_files: None,
             max_changed_lines: None,
             max_deleted_files: None,
-            action: Action::Approve,
-            symlinks: Action::Approve,
+            action: Action::Deny,
+            symlinks: Action::Deny,
             submodules: Action::Deny,
-            mode_changes: Action::Approve,
+            mode_changes: Action::Deny,
             binary: Action::Warn,
             human_action: Action::Allow,
-            approvers: Vec::new(),
         }
     }
 }
@@ -357,12 +337,10 @@ pub struct RuleCfg {
     /// Which kinds of change trigger the rule. Default: all.
     #[serde(default)]
     pub on: Vec<ChangeKind>,
-    #[serde(default)]
-    pub approvers: Vec<String>,
 }
 
 fn default_action() -> Action {
-    Action::Approve
+    Action::Deny
 }
 
 // ---------------------------------------------------------------- compiled
@@ -422,7 +400,7 @@ pub struct Rule {
     pub exclude: Option<GlobSet>,
     pub langs: Option<Vec<Lang>>,
     pub on: Vec<ChangeKind>,
-    pub approvers: Vec<String>,
+
     pub spec: RuleSpec,
 }
 
@@ -463,7 +441,7 @@ pub struct Policy {
     pub source: String,
     pub settings: SettingsCfg,
     pub ai: CompiledAi,
-    pub approvals: ApprovalsCfg,
+
     pub markers: MarkersCfg,
     pub limits: LimitsCfg,
     pub rules: Vec<Rule>,
@@ -492,22 +470,6 @@ impl Policy {
         Ok(p)
     }
 
-    /// Team approvers (`team:org/slug` or `@org/slug`) referenced anywhere, so
-    /// CI knows which team memberships to fetch.
-    pub fn referenced_teams(&self) -> Vec<String> {
-        let mut lists: Vec<&[String]> = vec![
-            self.approvals.approvers.as_slice(),
-            self.markers.approvers.as_slice(),
-            self.limits.approvers.as_slice(),
-        ];
-        lists.extend(self.rules.iter().map(|r| r.approvers.as_slice()));
-        lists.extend(self.approvals.groups.values().map(|v| v.as_slice()));
-        let mut out: Vec<String> = lists.into_iter().flatten().filter_map(|a| team_slug(a)).collect();
-        out.sort();
-        out.dedup();
-        out
-    }
-
     pub fn builtin(policy_path: &str, note: &str) -> Policy {
         let mut p = Self::compile_with("", policy_path, "built-in defaults".into(), &NoIncludes)
             .expect("built-in policy compiles");
@@ -522,35 +484,11 @@ impl Policy {
             bail!("unsupported policy version {v} (this twokey understands version 1)");
         }
         let ci = raw.settings.case_insensitive_paths;
-        let groups = &raw.approvals.groups;
-        let check_approvers = |list: &[String], ctx: &str| -> Result<()> {
-            for a in list {
-                if a.trim().starts_with("team:") && team_slug(a).is_none() {
-                    bail!("{ctx}: `{a}` is not a valid team (use team:org/slug)");
-                }
-                if let Some(g) = a.strip_prefix("group:") {
-                    match groups.get(g) {
-                        None => bail!("{ctx}: unknown approver group `{g}`"),
-                        // An empty group would otherwise fall through to "anyone may approve".
-                        Some(m) if m.iter().all(|x| x.trim().is_empty()) => {
-                            bail!("{ctx}: approver group `{g}` has no members")
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Ok(())
-        };
-        check_approvers(&raw.approvals.approvers, "[approvals]")?;
-        check_approvers(&raw.markers.approvers, "[markers]")?;
-        check_approvers(&raw.limits.approvers, "[limits]")?;
-
         let mut rules = Vec::new();
         let mut ids = HashSet::new();
 
         // Built-in, always on, can't be removed or weakened by any policy: twokey's
-        // own configuration is never changeable by AI, and human changes to it
-        // need approval. (A policy can only *add* paths via settings.protect.)
+        // own configuration is never changeable by AI, human changes remain subject to repository protections. (A policy can only *add* paths via settings.protect.)
         let mut protected = vec![escape_literal(policy_path)];
         protected.extend(BUILTIN_PROTECTED.iter().map(|s| s.to_string()));
         protected.extend(raw.settings.protect.iter().cloned());
@@ -559,13 +497,13 @@ impl Policy {
             id: "twokey-policy".into(),
             kind: "policy",
             action: Action::Deny,
-            human_action: Action::Approve,
-            reason: Some("twokey's own configuration must be changed by a human, with approval.".into()),
+            human_action: Action::Allow,
+            reason: Some("twokey's own configuration must be changed by a human.".into()),
             files: Some(path_set(&protected, ci)?),
             exclude: None,
             langs: None,
             on: Vec::new(),
-            approvers: Vec::new(),
+
             spec: RuleSpec::Path,
         });
         // Built-in: CI, hook and agent config files that wire twokey in. Any such
@@ -575,9 +513,9 @@ impl Policy {
             id: "twokey-wiring".into(),
             kind: "policy",
             action: Action::Deny,
-            human_action: Action::Approve,
+            human_action: Action::Allow,
             reason: Some(
-                "This file runs or registers twokey (CI step, git hook, agent hook); only a human may change it, with approval."
+                "This file runs or registers twokey (CI step, git hook, agent hook); only a human may change it."
                     .into(),
             ),
             files: Some(path_set(
@@ -587,7 +525,7 @@ impl Policy {
             exclude: None,
             langs: None,
             on: Vec::new(),
-            approvers: Vec::new(),
+
             spec: RuleSpec::Mentions {
                 re: Regex::new(r"(?i)twokey").expect("static regex"),
             },
@@ -604,7 +542,6 @@ impl Policy {
             if !ids.insert(r.id.clone()) {
                 bail!("duplicate rule id `{}`", r.id);
             }
-            check_approvers(&r.approvers, &ctx)?;
             let files = if r.paths.is_empty() {
                 None
             } else {
@@ -694,13 +631,30 @@ impl Policy {
                 exclude,
                 langs,
                 on: r.on,
-                approvers: r.approvers,
+
                 spec,
             });
         }
 
+        if raw.ai.human_marker.trim().is_empty()
+            || raw.ai.human_marker.trim() != raw.ai.human_marker
+            || raw.ai.human_marker.chars().any(char::is_control)
+        {
+            bail!(
+                "ai.human_marker must be a non-empty single line without surrounding whitespace or control characters"
+            );
+        }
+        if !raw.ai.assume_ai && raw.ai.trailers.as_ref().is_none_or(Vec::is_empty) {
+            bail!(
+                "ai.assume_ai = false requires an explicit, non-empty ai.trailers list; define AI commit-message patterns or keep assume_ai = true"
+            );
+        }
+        let trailer_patterns = raw.ai.trailers.clone().unwrap_or_else(default_ai_trailers);
+        if trailer_patterns.iter().any(|p| p.trim().is_empty()) {
+            bail!("ai.trailers must not contain blank patterns");
+        }
         let ai = CompiledAi {
-            trailers: regexes(&raw.ai.trailers, "ai.trailers")?,
+            trailers: regexes(&trailer_patterns, "ai.trailers")?,
             authors: regexes(&raw.ai.authors, "ai.authors")?,
             branches: regexes(&raw.ai.branches, "ai.branches")?,
             cfg: raw.ai,
@@ -710,55 +664,13 @@ impl Policy {
             source,
             settings: raw.settings,
             ai,
-            approvals: raw.approvals,
+
             markers: raw.markers,
             limits: raw.limits,
             rules,
             notes: Vec::new(),
         })
     }
-
-    /// Expand `group:x` entries and normalize to `login` / `team:org/slug`;
-    /// an empty list falls back to the global approvers.
-    pub fn resolve_approvers(&self, list: &[String]) -> Vec<String> {
-        let base = if list.is_empty() {
-            &self.approvals.approvers
-        } else {
-            list
-        };
-        let mut out: Vec<String> = Vec::new();
-        for a in base {
-            match a.strip_prefix("group:") {
-                Some(g) => out.extend(self.approvals.groups.get(g).cloned().unwrap_or_default()),
-                None => out.push(a.clone()),
-            }
-        }
-        let mut out: Vec<String> = out
-            .iter()
-            .map(|a| match team_slug(a) {
-                Some(t) => format!("team:{t}"),
-                None => a.trim().trim_start_matches('@').to_lowercase(),
-            })
-            .collect();
-        out.retain(|a| !a.trim().is_empty());
-        out.sort();
-        out.dedup();
-        if out.is_empty() && !base.is_empty() {
-            // Approvers were configured but resolve to nobody: fail closed.
-            out.push(NOBODY.to_string());
-        }
-        out
-    }
-}
-
-/// `team:org/slug` or `@org/slug` -> `org/slug` (lowercase).
-pub fn team_slug(a: &str) -> Option<String> {
-    let a = a.trim();
-    let t = a
-        .strip_prefix("team:")
-        .or_else(|| a.strip_prefix('@').filter(|s| s.contains('/')))?;
-    let t = t.trim().to_lowercase();
-    (t.split('/').count() == 2 && !t.starts_with('/') && !t.ends_with('/')).then_some(t)
 }
 
 // ---------------------------------------------------------------- loading
@@ -824,7 +736,7 @@ pub fn load(repo: &Repo, args: &PolicyArgs, default_ref: Option<&str>) -> Result
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -859,7 +771,26 @@ mod tests {
     fn example_policy_compiles() {
         let text = include_str!("../examples/twokey.toml");
         let p = Policy::compile(text, ".twokey.toml", "example".into()).unwrap();
+        assert_eq!(p.rules.len(), 2, "starter enables only built-in rules");
+        let enabled = enabled_example();
+        let p = Policy::compile(&enabled, ".twokey.toml", "example".into()).unwrap();
         assert!(p.rules.len() > 5);
+    }
+
+    pub fn enabled_example() -> String {
+        let mut in_rules = false;
+        include_str!("../examples/twokey.toml")
+            .lines()
+            .map(|line| {
+                in_rules |= line == "# [[rule]]";
+                if in_rules {
+                    line.strip_prefix("# ").unwrap_or(line)
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     struct FakeTree(Vec<(&'static str, &'static str)>);
@@ -909,36 +840,35 @@ mod tests {
     }
 
     #[test]
-    fn team_approvers() {
+    fn signal_only_attribution_requires_explicit_trailers() {
+        for suffix in ["", "\ntrailers=[]", "\ntrailers=['']", "\ntrailers=['   ']"] {
+            let text = format!("[ai]\nassume_ai=false{suffix}");
+            let error = Policy::compile(&text, ".twokey.toml", "test".into()).err().unwrap();
+            assert!(error.to_string().contains("ai.trailers"), "{error}");
+        }
         let p = Policy::compile(
-            "[approvals]\napprovers=['@Acme/Security', 'team:acme/infra', '@Bob']\n",
+            "[ai]\nassume_ai=false\ntrailers=['^Generated-by:']",
             ".twokey.toml",
-            "t".into(),
+            "test".into(),
         )
         .unwrap();
-        assert_eq!(
-            p.referenced_teams(),
-            vec!["acme/infra".to_string(), "acme/security".to_string()]
-        );
-        assert_eq!(
-            p.resolve_approvers(&[]),
-            vec![
-                "bob".to_string(),
-                "team:acme/infra".to_string(),
-                "team:acme/security".to_string()
-            ]
-        );
-        assert!(Policy::compile("[approvals]\napprovers=['team:nope']\n", ".twokey.toml", "t".into()).is_err());
+        assert_eq!(p.ai.trailers.len(), 1);
+        assert!(p.ai.trailers[0].is_match("Generated-by: local-model"));
+        // Default-AI policies still work without explicit patterns.
+        assert!(Policy::compile("", ".twokey.toml", "test".into()).is_ok());
     }
 
     #[test]
-    fn groups_resolve() {
-        let p = Policy::compile(
-            "[approvals]\napprovers=['group:sec']\n[approvals.groups]\nsec=['alice','bob']\n",
-            ".twokey.toml",
-            "t".into(),
-        )
-        .unwrap();
-        assert_eq!(p.resolve_approvers(&[]), vec!["alice".to_string(), "bob".to_string()]);
+    fn rejects_removed_approval_configuration() {
+        for text in [
+            "[approvals]\napprovers=['alice']",
+            "[[rule]]\nid='x'\nkind='path'\npaths=['a']\naction='approve'",
+            "[[rule]]\nid='x'\nkind='path'\npaths=['a']\napprovers=['alice']",
+            "[markers]\napprovers=['alice']",
+            "[markers]\nreview_action='warn'",
+            "[limits]\napprovers=['alice']",
+        ] {
+            assert!(Policy::compile(text, ".twokey.toml", "test".into()).is_err(), "{text}");
+        }
     }
 }

@@ -1,10 +1,10 @@
 # twokey
 
-**Une approbation humaine pour le code qui compte.**
+**Protégez le code contre les modifications de l’IA.**
 
 [English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
 
-twokey vérifie les modifications du code selon la politique de votre dépôt. Il peut bloquer les modifications attribuées à une IA dans les fichiers protégés ou exiger une approbation de personnes désignées. Les vérifications sont déterministes et ne font appel à aucun modèle d’IA.
+twokey bloque les modifications attribuées à l’IA dans les fichiers, fonctions et régions protégés. Les vérifications sont déterministes et n’utilisent aucun modèle d’IA. GitHub gère les revues humaines ; twokey ne gère ni utilisateurs, ni groupes, ni approbations.
 
 ## Installation
 
@@ -18,7 +18,7 @@ cargo install --path . --locked
 
 ## Démarrage rapide
 
-Copiez l’[exemple minimal](../../examples/minimal.toml) dans `.twokey.toml` à la racine de votre dépôt. Remplacez `your-github-login` par le compte GitHub du réviseur et adaptez les chemins. L’exemple bloque les modifications de la CI attribuées à une IA et exige une revue pour `/src/auth/**`.
+Exécutez `twokey init` pour créer la [configuration de départ](../../examples/twokey.toml). Décommentez les règles souhaitées et adaptez leurs chemins. Les changements sont considérés comme assistés par IA par défaut ; les commits entièrement humains déclarent `Human-Authored: true` à la fin du message, après une ligne vide.
 
 ```sh
 twokey validate --policy .twokey.toml

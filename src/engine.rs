@@ -1,11 +1,11 @@
-//! Rule evaluation: file changes + policy + attribution + approvals -> verdict.
+//! Rule evaluation: file changes + policy + attribution -> verdict.
 
 use crate::attribution::Attribution;
 use crate::config::{Action, ChangeKind, LineSel, Policy, Rule, RuleSpec};
 use crate::git::{FileChange, MODE_EXEC, MODE_SUBMODULE, MODE_SYMLINK, Status};
 use crate::glob::normalize_rel;
 use crate::lang::{Lang, parse};
-use crate::markers::{self, MarkerKind};
+use crate::markers;
 use crate::symbols::{self, Capture, Symbol};
 use serde::Serialize;
 use similar::{ChangeTag, TextDiff};
@@ -30,19 +30,11 @@ pub struct Finding {
     pub reason: Option<String>,
     pub ai: bool,
     pub action: Action,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub approvers: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approved_by: Option<String>,
 }
 
 impl Finding {
     pub fn blocking(&self) -> bool {
-        match self.action {
-            Action::Deny => true,
-            Action::Approve => self.approved_by.is_none(),
-            _ => false,
-        }
+        self.action == Action::Deny
     }
 }
 
@@ -50,7 +42,6 @@ impl Finding {
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
     Pass,
-    NeedsApproval,
     Blocked,
 }
 
@@ -58,7 +49,6 @@ impl Verdict {
     pub fn label(self) -> &'static str {
         match self {
             Verdict::Pass => "PASS",
-            Verdict::NeedsApproval => "NEEDS APPROVAL",
             Verdict::Blocked => "BLOCKED",
         }
     }
@@ -66,25 +56,6 @@ impl Verdict {
         match self {
             Verdict::Pass => 0,
             Verdict::Blocked => 1,
-            Verdict::NeedsApproval => 3,
-        }
-    }
-}
-
-/// Human approvals of the exact head being checked.
-#[derive(Debug, Clone, Default)]
-pub struct Approvals {
-    /// Logins that approved.
-    pub logins: Vec<String>,
-    /// Team memberships for team approvers: `org/slug` -> logins.
-    pub teams: BTreeMap<String, Vec<String>>,
-}
-
-impl Approvals {
-    pub fn from_logins(logins: &[String]) -> Approvals {
-        Approvals {
-            logins: logins.to_vec(),
-            teams: BTreeMap::new(),
         }
     }
 }
@@ -149,7 +120,6 @@ impl<'p> Ctx<'p> {
         path: &str,
         ai_action: Action,
         human_action: Action,
-        approvers: &[String],
         reason: Option<String>,
         change: &str,
         line: Option<usize>,
@@ -161,11 +131,6 @@ impl<'p> Ctx<'p> {
         if action == Action::Allow {
             return;
         }
-        let approvers = if action == Action::Approve {
-            self.policy.resolve_approvers(approvers)
-        } else {
-            Vec::new()
-        };
         self.findings.push(Finding {
             rule: rule_id.to_string(),
             kind: kind.to_string(),
@@ -177,8 +142,6 @@ impl<'p> Ctx<'p> {
             reason,
             ai,
             action,
-            approvers,
-            approved_by: None,
         });
     }
 
@@ -200,7 +163,6 @@ impl<'p> Ctx<'p> {
             path,
             r.action,
             r.human_action,
-            &r.approvers,
             r.reason.clone(),
             change_name(change),
             line,
@@ -265,7 +227,7 @@ impl Evaluation {
     }
 }
 
-pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, approvals: &Approvals) -> Evaluation {
+pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution) -> Evaluation {
     let mut cx = Ctx {
         policy,
         att,
@@ -354,7 +316,6 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                                         path,
                                         r.action,
                                         r.human_action,
-                                        &r.approvers,
                                         r.reason.clone(),
                                         verb,
                                         line,
@@ -434,9 +395,8 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                         "twokey-symlink",
                         "limit",
                         path,
-                        policy.limits.symlinks.max(Action::Approve),
+                        policy.limits.symlinks.max(Action::Deny),
                         policy.limits.human_action,
-                        &policy.limits.approvers,
                         None,
                         "added",
                         None,
@@ -460,7 +420,6 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                                 path,
                                 r.action,
                                 r.human_action,
-                                &r.approvers,
                                 r.reason.clone(),
                                 "added",
                                 None,
@@ -474,7 +433,6 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                             path,
                             policy.limits.symlinks,
                             policy.limits.human_action,
-                            &policy.limits.approvers,
                             None,
                             "added",
                             None,
@@ -492,7 +450,6 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                 path,
                 policy.limits.submodules,
                 policy.limits.human_action,
-                &policy.limits.approvers,
                 None,
                 change_name(kind),
                 None,
@@ -513,7 +470,6 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                 path,
                 policy.limits.mode_changes,
                 policy.limits.human_action,
-                &policy.limits.approvers,
                 None,
                 "modified",
                 None,
@@ -527,7 +483,6 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                 path,
                 policy.limits.mode_changes,
                 policy.limits.human_action,
-                &policy.limits.approvers,
                 None,
                 "added",
                 None,
@@ -542,7 +497,6 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                 path,
                 policy.limits.binary,
                 policy.limits.human_action,
-                &policy.limits.approvers,
                 None,
                 change_name(kind),
                 None,
@@ -564,10 +518,7 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                 new.text().map(str::to_string)
             };
             for hit in markers::compare(&base_text, head_text.as_deref()) {
-                let ai_action = match hit.kind {
-                    MarkerKind::Lock => policy.markers.lock_action,
-                    MarkerKind::Review => policy.markers.review_action,
-                };
+                let ai_action = policy.markers.lock_action;
                 let reason = (!hit.reason.is_empty()).then(|| hit.reason.clone());
                 cx.push(
                     &format!("twokey-{}-marker", hit.kind.name()),
@@ -575,7 +526,6 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
                     path,
                     ai_action,
                     policy.markers.human_action,
-                    &policy.markers.approvers,
                     reason,
                     hit.change,
                     hit.line,
@@ -617,23 +567,6 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
     }
 
     let mut findings = dedup(cx.findings);
-    apply_approvals(&mut findings, approvals);
-    // Team approvers whose membership wasn't provided can never approve; say so.
-    let mut missing: Vec<&str> = findings
-        .iter()
-        .filter(|f| f.blocking())
-        .flat_map(|f| f.approvers.iter())
-        .filter_map(|a| a.strip_prefix("team:"))
-        .filter(|t| !approvals.teams.contains_key(*t))
-        .collect();
-    missing.sort();
-    missing.dedup();
-    if !missing.is_empty() {
-        notes.push(format!(
-            "membership not provided for team(s) {}; pass --teams-file so their members can approve",
-            missing.join(", ")
-        ));
-    }
     findings.sort_by(|a, b| {
         b.action
             .cmp(&a.action)
@@ -643,14 +576,9 @@ pub fn evaluate(policy: &Policy, changes: &[FileChange], att: &Attribution, appr
 
     let verdict = if findings.iter().any(|f| f.action == Action::Deny) {
         Verdict::Blocked
-    } else if findings.iter().any(|f| f.blocking()) {
-        Verdict::NeedsApproval
     } else {
         Verdict::Pass
     };
-    if !approvals.logins.is_empty() {
-        notes.push(format!("approvals considered: {}", approvals.logins.join(", ")));
-    }
     if !policy.settings.enforce {
         notes.push("report-only mode (settings.enforce = false): nothing is blocked".into());
     }
@@ -674,11 +602,6 @@ fn push_limit(cx: &mut Ctx, msg: &str, changes: &[FileChange]) {
     if action == Action::Allow {
         return;
     }
-    let approvers = if action == Action::Approve {
-        cx.policy.resolve_approvers(&lim.approvers)
-    } else {
-        Vec::new()
-    };
     cx.findings.push(Finding {
         rule: "twokey-limits".into(),
         kind: "limit".into(),
@@ -687,11 +610,9 @@ fn push_limit(cx: &mut Ctx, msg: &str, changes: &[FileChange]) {
         symbol: None,
         change: "size".into(),
         message: msg.to_string(),
-        reason: Some("Large AI changes are hard to review; split them up or get explicit sign-off.".into()),
+        reason: Some("Large AI changes are hard to review; split them up.".into()),
         ai,
         action,
-        approvers,
-        approved_by: None,
     });
 }
 
@@ -876,39 +797,6 @@ fn dedup(v: Vec<Finding>) -> Vec<Finding> {
         .collect()
 }
 
-fn apply_approvals(findings: &mut [Finding], approvals: &Approvals) {
-    let norm = |a: &str| a.trim().trim_start_matches('@').to_lowercase();
-    let given: Vec<String> = approvals
-        .logins
-        .iter()
-        .map(|a| norm(a))
-        .filter(|a| !a.is_empty())
-        .collect();
-    if given.is_empty() {
-        return;
-    }
-    let teams: BTreeMap<String, Vec<String>> = approvals
-        .teams
-        .iter()
-        .map(|(k, v)| (k.to_lowercase(), v.iter().map(|m| norm(m)).collect()))
-        .collect();
-    for f in findings.iter_mut().filter(|f| f.action == Action::Approve) {
-        let ok = if f.approvers.is_empty() {
-            // No approver list anywhere: any human approval satisfies it.
-            given.first().cloned()
-        } else {
-            f.approvers.iter().find_map(|req| match req.strip_prefix("team:") {
-                Some(t) => teams
-                    .get(t)
-                    .and_then(|members| given.iter().find(|g| members.contains(g)))
-                    .map(|g| format!("{g} (team {t})")),
-                None => given.iter().find(|g| **g == norm(req)).cloned(),
-            })
-        };
-        f.approved_by = ok;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -930,10 +818,6 @@ mod tests {
     }
 
     const POLICY: &str = r#"
-[approvals]
-approvers = ["group:sec"]
-[approvals.groups]
-sec = ["alice"]
 
 [[rule]]
 id = "workflows"
@@ -946,7 +830,7 @@ id = "auth"
 kind = "symbol"
 paths = ["src/auth/**"]
 symbols = ["verify_*"]
-action = "approve"
+action = "deny"
 
 [[rule]]
 id = "unsafe"
@@ -963,18 +847,17 @@ pattern = '@pytest\.mark\.skip'
 action = "deny"
 "#;
 
-    fn run(changes: Vec<FileChange>, ai: bool, approvers: &[&str]) -> Evaluation {
+    fn run(changes: Vec<FileChange>, ai: bool) -> Evaluation {
         let p = Policy::compile(POLICY, ".twokey.toml", "test".into()).unwrap();
         let att = Attribution::whole(ai, "test");
-        let a: Vec<String> = approvers.iter().map(|s| s.to_string()).collect();
-        evaluate(&p, &changes, &att, &Approvals::from_logins(&a))
+        evaluate(&p, &changes, &att)
     }
 
     #[test]
     fn twokey_config_is_always_protected() {
         // Policy with no rules at all: built-ins still apply.
         let p = Policy::compile("", ".twokey.toml", "t".into()).unwrap();
-        let run = |c: FileChange, ai: bool| evaluate(&p, &[c], &Attribution::whole(ai, "t"), &Approvals::default());
+        let run = |c: FileChange, ai: bool| evaluate(&p, &[c], &Attribution::whole(ai, "t"));
         let hook = "#!/bin/sh\nexec twokey check --staged\n";
         // editing, removing twokey from, or deleting a file that wires it in
         assert_eq!(
@@ -997,10 +880,10 @@ action = "deny"
             .verdict,
             Verdict::Blocked
         );
-        // humans may, with approval
+        // Human edits are governed by the repository, not twokey approvals.
         assert_eq!(
             run(fc(".githooks/pre-commit", Some(hook), Some("x")), false).verdict,
-            Verdict::NeedsApproval
+            Verdict::Pass,
         );
         // unrelated workflows and hooks are not affected by the built-in
         assert_eq!(
@@ -1011,61 +894,49 @@ action = "deny"
         for f in [
             "services/pay/.twokey.toml",
             ".github/twokey/run.sh",
-            ".twokey/teams.json",
+            ".twokey/config.json",
         ] {
             assert_eq!(run(fc(f, Some("a"), Some("b")), true).verdict, Verdict::Blocked, "{f}");
         }
     }
 
     #[test]
-    fn team_approval_and_report_only() {
-        let pol = "[approvals]\napprovers = ['team:acme/sec']\n[[rule]]\nid='w'\nkind='path'\npaths=['/w/**']\n";
-        let p = Policy::compile(pol, ".twokey.toml", "t".into()).unwrap();
-        let att = Attribution::whole(true, "t");
-        let c = vec![fc("w/a", Some("a"), Some("b"))];
-        let mut ap = Approvals::from_logins(&["Carol".to_string()]);
-        let e = evaluate(&p, &c, &att, &ap);
-        assert_eq!(e.verdict, Verdict::NeedsApproval);
-        assert!(e.notes.iter().any(|n| n.contains("acme/sec")));
-        ap.teams.insert("acme/sec".into(), vec!["carol".into()]);
-        assert_eq!(evaluate(&p, &c, &att, &ap).verdict, Verdict::Pass);
-
-        let p = Policy::compile(
-            &format!("[settings]\nenforce = false\n{pol}"),
-            ".twokey.toml",
-            "t".into(),
-        )
-        .unwrap();
-        let e = evaluate(&p, &c, &att, &Approvals::default());
-        assert_eq!(e.verdict, Verdict::NeedsApproval);
+    fn deny_is_reported_but_not_enforced_in_dry_run() {
+        let mut p = Policy::compile(POLICY, ".twokey.toml", "test".into()).unwrap();
+        p.settings.enforce = false;
+        let e = evaluate(
+            &p,
+            &[fc("src/auth/mod.rs", Some("fn verify_x() {}"), None)],
+            &Attribution::whole(true, "test"),
+        );
+        assert_eq!(e.verdict, Verdict::Blocked);
         assert_eq!(e.exit_code(), 0);
     }
 
     #[test]
     fn path_deny_for_ai_only() {
         let c = vec![fc(".github/workflows/ci.yml", Some("a"), Some("b"))];
-        assert_eq!(run(c.clone(), true, &[]).verdict, Verdict::Blocked);
-        assert_eq!(run(c, false, &[]).verdict, Verdict::Pass);
+        assert_eq!(run(c.clone(), true).verdict, Verdict::Blocked);
+        assert_eq!(run(c, false).verdict, Verdict::Pass);
     }
 
     #[test]
     fn policy_file_is_self_protected() {
         let c = vec![fc(".twokey.toml", Some("a"), Some("b"))];
-        assert_eq!(run(c.clone(), true, &[]).verdict, Verdict::Blocked);
-        assert_eq!(run(c.clone(), false, &[]).verdict, Verdict::NeedsApproval);
-        assert_eq!(run(c, false, &["alice"]).verdict, Verdict::Pass);
+        assert_eq!(run(c.clone(), true).verdict, Verdict::Blocked);
+        assert_eq!(run(c, false).verdict, Verdict::Pass);
     }
 
     #[test]
-    fn protected_symbol_needs_right_approver() {
+    fn protected_symbol_blocks_ai_and_allows_humans() {
         let base = "pub fn verify_token(t: &str) -> bool { t.len() == 32 }\npub fn helper() {}\n";
         let head = "pub fn verify_token(t: &str) -> bool { true }\npub fn helper() {}\n";
         let c = vec![fc("src/auth/mod.rs", Some(base), Some(head))];
-        let e = run(c.clone(), true, &[]);
-        assert_eq!(e.verdict, Verdict::NeedsApproval);
+        let e = run(c.clone(), true);
+        assert_eq!(e.verdict, Verdict::Blocked);
+        assert_eq!(e.exit_code(), 1);
         assert_eq!(e.findings[0].symbol.as_deref(), Some("verify_token"));
-        assert_eq!(run(c.clone(), true, &["mallory"]).verdict, Verdict::NeedsApproval);
-        assert_eq!(run(c, true, &["@Alice"]).verdict, Verdict::Pass);
+        assert_eq!(run(c, false).verdict, Verdict::Pass);
     }
 
     #[test]
@@ -1073,7 +944,7 @@ action = "deny"
         let base = "pub fn verify_token(t: &str) -> bool { t.len() == 32 }\npub fn helper() {}\n";
         let head =
             "pub fn verify_token(t: &str) -> bool {\n    t.len() == 32\n}\npub fn helper() { println!(\"hi\"); }\n";
-        let e = run(vec![fc("src/auth/mod.rs", Some(base), Some(head))], true, &[]);
+        let e = run(vec![fc("src/auth/mod.rs", Some(base), Some(head))], true);
         assert_eq!(e.verdict, Verdict::Pass, "{:?}", e.findings);
     }
 
@@ -1081,7 +952,7 @@ action = "deny"
     fn renaming_a_protected_symbol_is_caught() {
         let base = "pub fn verify_token() {}\n";
         let head = "pub fn check_token() {}\n";
-        let e = run(vec![fc("src/auth/mod.rs", Some(base), Some(head))], true, &[]);
+        let e = run(vec![fc("src/auth/mod.rs", Some(base), Some(head))], true);
         assert!(e.findings.iter().any(|f| f.change == "deleted"));
     }
 
@@ -1089,8 +960,8 @@ action = "deny"
     fn new_unsafe_block_flagged() {
         let base = "fn f() { let x = 1; }\n";
         let head = "fn f() { let x = unsafe { *std::ptr::null::<u8>() }; }\n";
-        let e = run(vec![fc("src/lib.rs", Some(base), Some(head))], true, &[]);
-        assert_eq!(e.verdict, Verdict::NeedsApproval);
+        let e = run(vec![fc("src/lib.rs", Some(base), Some(head))], true);
+        assert_eq!(e.verdict, Verdict::Blocked);
         assert_eq!(e.findings[0].rule, "unsafe");
     }
 
@@ -1098,7 +969,7 @@ action = "deny"
     fn content_rule_on_added_lines_only() {
         let base = "@pytest.mark.skip\ndef test_a(): pass\n";
         let head = "@pytest.mark.skip\ndef test_a(): pass\n\n@pytest.mark.skip\ndef test_b(): pass\n";
-        let e = run(vec![fc("tests/test_x.py", Some(base), Some(head))], true, &[]);
+        let e = run(vec![fc("tests/test_x.py", Some(base), Some(head))], true);
         assert_eq!(e.verdict, Verdict::Blocked);
         assert_eq!(e.findings.iter().filter(|f| f.rule == "skips").count(), 1);
         assert_eq!(e.findings[0].line, Some(4));
@@ -1106,13 +977,12 @@ action = "deny"
 
     #[test]
     fn content_rule_bans_em_dashes() {
-        let policy = Policy::compile(include_str!("../examples/twokey.toml"), ".twokey.toml", "test".into()).unwrap();
+        let policy = Policy::compile(&crate::config::tests::enabled_example(), ".twokey.toml", "test".into()).unwrap();
         let check = |before, after, ai| {
             evaluate(
                 &policy,
                 &[fc("docs/guide.md", before, after)],
                 &Attribution::whole(ai, "test"),
-                &Approvals::default(),
             )
         };
         for ai in [true, false] {
@@ -1144,7 +1014,7 @@ action = "deny"
     fn syntax_errors_fail_closed() {
         let base = "pub fn verify_token() -> bool { false }\n";
         let head = "pub fn verify_token() -> bool { false \n";
-        let e = run(vec![fc("src/auth/mod.rs", Some(base), Some(head))], true, &[]);
+        let e = run(vec![fc("src/auth/mod.rs", Some(base), Some(head))], true);
         assert_ne!(e.verdict, Verdict::Pass);
     }
 
@@ -1152,7 +1022,7 @@ action = "deny"
     fn symlink_into_protected_path() {
         let mut c = fc("docs/ci.yml", None, Some("../.github/workflows/ci.yml"));
         c.new_mode = MODE_SYMLINK;
-        let e = run(vec![c], true, &[]);
+        let e = run(vec![c], true);
         assert_eq!(e.verdict, Verdict::Blocked);
     }
 
@@ -1160,7 +1030,7 @@ action = "deny"
     fn lock_markers() {
         let base = "x\n// twokey:lock-begin\nconst K: u8 = 1;\n// twokey:lock-end\n";
         let head = base.replace("= 1", "= 2");
-        let e = run(vec![fc("src/k.rs", Some(base), Some(&head))], true, &[]);
+        let e = run(vec![fc("src/k.rs", Some(base), Some(&head))], true);
         assert_eq!(e.verdict, Verdict::Blocked);
     }
 }

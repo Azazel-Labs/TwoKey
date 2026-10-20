@@ -1,10 +1,10 @@
 # twokey
 
-**让重要的代码变更经过人工批准。**
+**阻止 AI 修改受保护的代码。**
 
 [English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
 
-twokey 是一个根据仓库策略检查代码变更的命令行工具。它可以阻止被识别为 AI 编写的变更修改受保护文件，或要求指定人员批准。检查过程是确定性的，不使用 AI 模型。
+twokey 阻止被归因于 AI 的变更修改受保护的文件、函数和代码区域。检查是确定性的，不使用 AI 模型。人工审查由 GitHub 管理；twokey 不管理用户、组或审批。
 
 ## 安装
 
@@ -18,7 +18,7 @@ cargo install --path . --locked
 
 ## 快速开始
 
-将[最小配置示例](../../examples/minimal.toml)复制到仓库根目录，命名为 `.twokey.toml`。把 `your-github-login` 替换为审批人的 GitHub 用户名，并调整路径。该示例禁止 AI 修改 CI 配置，并要求对 `/src/auth/**` 的变更进行人工审批。
+运行 `twokey init` 生成[初始配置](../../examples/twokey.toml)，取消所需规则的注释并调整路径。默认将更改视为 AI 辅助编写；完全由人类编写的提交应在提交消息末尾空一行后添加 `Human-Authored: true`。
 
 ```sh
 twokey validate --policy .twokey.toml

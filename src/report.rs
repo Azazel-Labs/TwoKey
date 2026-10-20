@@ -67,16 +67,10 @@ fn md_cell(s: &str) -> String {
         .replace('[', "\\[")
 }
 
-fn counts(e: &Evaluation) -> (usize, usize, usize, usize) {
+fn counts(e: &Evaluation) -> (usize, usize) {
     let deny = e.findings.iter().filter(|f| f.action == Action::Deny).count();
-    let pending = e
-        .findings
-        .iter()
-        .filter(|f| f.action == Action::Approve && f.approved_by.is_none())
-        .count();
-    let approved = e.findings.iter().filter(|f| f.approved_by.is_some()).count();
     let warn = e.findings.iter().filter(|f| f.action == Action::Warn).count();
-    (deny, pending, approved, warn)
+    (deny, warn)
 }
 
 fn location(f: &Finding) -> String {
@@ -92,12 +86,10 @@ fn location(f: &Finding) -> String {
 }
 
 fn status_label(f: &Finding) -> &'static str {
-    match (f.action, f.approved_by.is_some()) {
-        (Action::Deny, _) => "DENY",
-        (Action::Approve, true) => "APPROVED",
-        (Action::Approve, false) => "APPROVE",
-        (Action::Warn, _) => "WARN",
-        (Action::Allow, _) => "ALLOW",
+    match f.action {
+        Action::Deny => "DENY",
+        Action::Warn => "WARN",
+        Action::Allow => "ALLOW",
     }
 }
 
@@ -114,13 +106,9 @@ fn attribution_line(e: &Evaluation) -> String {
 }
 
 pub fn text(e: &Evaluation) -> String {
-    let (deny, pending, approved, warn) = counts(e);
+    let (deny, warn) = counts(e);
     let mut s = String::new();
-    let _ = writeln!(
-        s,
-        "twokey: {} — {deny} blocked, {pending} awaiting approval, {approved} approved, {warn} warnings",
-        verdict_label(e)
-    );
+    let _ = writeln!(s, "twokey: {} — {deny} blocked, {warn} warnings", verdict_label(e));
     let _ = writeln!(
         s,
         "  {} files, {} lines changed · {}",
@@ -156,19 +144,6 @@ pub fn text(e: &Evaluation) -> String {
         if let Some(r) = &f.reason {
             let _ = writeln!(s, "            {r}");
         }
-        if f.action == Action::Approve {
-            match &f.approved_by {
-                Some(a) => {
-                    let _ = writeln!(s, "            approved by {a}");
-                }
-                None if f.approvers.is_empty() => {
-                    let _ = writeln!(s, "            needs approval from any maintainer");
-                }
-                None => {
-                    let _ = writeln!(s, "            needs approval from one of: {}", f.approvers.join(", "));
-                }
-            }
-        }
     }
     s
 }
@@ -184,10 +159,9 @@ fn gh_escape_prop(s: &str) -> String {
 pub fn github_annotations(e: &Evaluation) -> String {
     let mut s = String::new();
     for f in &e.findings {
-        let level = match (f.action, f.approved_by.is_some()) {
-            (Action::Deny, _) | (Action::Approve, false) if e.enforced => "error",
-            (Action::Deny, _) | (Action::Approve, false) => "warning",
-            (Action::Warn, _) => "warning",
+        let level = match f.action {
+            Action::Deny if e.enforced => "error",
+            Action::Deny | Action::Warn => "warning",
             _ => "notice",
         };
         let mut props = Vec::new();
@@ -206,52 +180,41 @@ pub fn github_annotations(e: &Evaluation) -> String {
             msg.push('\n');
             msg.push_str(r);
         }
-        if f.action == Action::Approve && f.approved_by.is_none() && !f.approvers.is_empty() {
-            msg.push_str(&format!("\nNeeds approval from: {}", f.approvers.join(", ")));
-        }
         let _ = writeln!(s, "::{level} {}::{}", props.join(","), gh_escape_data(&msg));
     }
     s
 }
 
 pub fn markdown(e: &Evaluation) -> String {
-    let (deny, pending, approved, warn) = counts(e);
+    let (deny, warn) = counts(e);
     let icon = match e.verdict {
         Verdict::Pass => "✅",
-        Verdict::NeedsApproval => "🟡",
         Verdict::Blocked => "⛔",
     };
     let mut s = String::new();
     let _ = writeln!(s, "{MARKDOWN_MARKER}\n### {icon} twokey: {}\n", verdict_label(e));
     let _ = writeln!(
         s,
-        "{deny} blocked · {pending} awaiting approval · {approved} approved · {warn} warnings — {} files, {} lines · {}\n",
+        "{deny} blocked · {warn} warnings — {} files, {} lines · {}\n",
         e.files_changed,
         e.lines_changed,
         attribution_line(e)
     );
     if !e.findings.is_empty() {
-        let _ = writeln!(s, "| | Rule | Where | What | Approvers |");
-        let _ = writeln!(s, "|---|---|---|---|---|");
+        let _ = writeln!(s, "| | Rule | Where | What |");
+        let _ = writeln!(s, "|---|---|---|---|");
         for f in &e.findings {
-            let who = match (&f.approved_by, f.action) {
-                (Some(a), _) => format!("✔ {a}"),
-                (None, Action::Approve) if f.approvers.is_empty() => "any maintainer".into(),
-                (None, Action::Approve) => f.approvers.join(", "),
-                _ => String::new(),
-            };
             let what = match &f.reason {
                 Some(r) => format!("{}<br><sub>{}</sub>", md_cell(&f.message), md_cell(r)),
                 None => md_cell(&f.message),
             };
             let _ = writeln!(
                 s,
-                "| {} | `{}` | `{}` | {} | {} |",
+                "| {} | `{}` | `{}` | {} |",
                 status_label(f),
                 md_cell(&f.rule),
                 md_cell(&location(f)),
-                what,
-                md_cell(&who)
+                what
             );
         }
         s.push('\n');
